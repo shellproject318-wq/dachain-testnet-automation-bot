@@ -40,7 +40,7 @@ Automated daily activities for [DAC Inception](https://inception.dachain.io/acti
 
 ```bash
 git clone https://github.com/shellproject318-wq/dachain-testnet-automation-bot.git
-cd dachain-testnet-bot
+cd dachain-testnet-automation-bot
 npm install
 ```
 
