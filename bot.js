@@ -39,6 +39,21 @@ const CFG = {
   windowMs:     24 * 60 * 60 * 1000, // 24 jam dalam ms
 };
 
+// ── Suppress ethers.js internal "JsonRpcProvider failed to detect network" spam
+const _origWarn = console.warn.bind(console);
+console.warn = (...args) => {
+  const msg = typeof args[0] === 'string' ? args[0] : '';
+  if (msg.includes('JsonRpcProvider') || msg.includes('failed to detect network')) return;
+  _origWarn(...args);
+};
+// ethers v6 uses process.stderr for some internals — suppress known noise
+const _origStdErr = process.stderr.write.bind(process.stderr);
+process.stderr.write = (chunk, ...rest) => {
+  const s = typeof chunk === 'string' ? chunk : chunk.toString();
+  if (s.includes('JsonRpcProvider') || s.includes('failed to detect network')) return true;
+  return _origStdErr(chunk, ...rest);
+};
+
 // ================= LOGGER =================
 const C = {
   reset:  '\x1b[0m',
@@ -190,62 +205,144 @@ function createProvider(proxy) {
 // ================= API =================
 class ApiClient {
   constructor(wallet, proxy) {
-    this.w = wallet;
-    this.cookies = '';
-    this.csrf = '';
+    this.w          = wallet;
+    this._sessionid = '';   // stored separately — never clobbered by regex
+    this._csrftoken = '';
+    this.csrf       = '';   // alias used by _headers()
     const agent = createProxyAgent(proxy);
     this.http = axios.create({
       baseURL: CFG.api,
       timeout: 30000,
-      httpAgent: agent,
+      httpAgent:  agent,
       httpsAgent: agent,
       validateStatus: () => true,
     });
   }
+
+  // ── Cookie storage: parse Set-Cookie, keep sessionid & csrftoken separately
   _saveCookies(res) {
     const set = res.headers['set-cookie'];
     if (!set) return;
-    for (const c of set) {
-      const [pair] = c.split(';');
-      const [name] = pair.split('=');
-      const regex = new RegExp(`${name}=[^;]*`);
-      this.cookies = regex.test(this.cookies)
-        ? this.cookies.replace(regex, pair)
-        : (this.cookies ? this.cookies + '; ' : '') + pair;
+    for (const raw of set) {
+      const pair  = raw.split(';')[0];          // "name=value"
+      const eqIdx = pair.indexOf('=');
+      if (eqIdx === -1) continue;
+      const name  = pair.slice(0, eqIdx).trim();
+      const value = pair.slice(eqIdx + 1).trim();
+      if (name === 'csrftoken') { this._csrftoken = value; this.csrf = value; }
+      if (name === 'sessionid') { this._sessionid = value; }
     }
   }
-  async _getCsrf() {
-    const r = await this.http.get('/csrf/', {
-      headers: { Cookie: this.cookies }
-    });
-    this._saveCookies(r);
-    const match = this.cookies.match(/csrftoken=([^;]+)/);
-    if (match) this.csrf = match[1];
+
+  // ── Cookie header always rebuilt from stored values (no string mutation)
+  get cookies() {
+    const parts = [];
+    if (this._csrftoken) parts.push(`csrftoken=${this._csrftoken}`);
+    if (this._sessionid) parts.push(`sessionid=${this._sessionid}`);
+    return parts.join('; ');
   }
+
+  // ── Request headers
   _headers(post = false) {
-    const h = {
-      Cookie: this.cookies,
-      Accept: 'application/json',
-    };
+    const h = { Cookie: this.cookies, Accept: 'application/json' };
     if (post) {
       h['Content-Type'] = 'application/json';
-      h['X-CSRFToken'] = this.csrf;
-      h['Origin'] = CFG.api;
+      h['X-CSRFToken']  = this.csrf;
+      h['Origin']       = CFG.api;
     }
     return h;
   }
-  async init() {
-    await this._getCsrf();
-    const r = await this.http.post(
-      '/api/auth/wallet/',
-      { wallet_address: this.w.address.toLowerCase() },
-      { headers: this._headers(true) }
-    );
-    this._saveCookies(r);
-    await this._getCsrf();
-    if (r.status !== 200) throw new Error(JSON.stringify(r.data));
-    return r.data;
+
+  // ── CSRF bootstrap — retries up to 5x (server intermittently returns 500)
+  async _getCsrf() {
+    const RETRIES = 5;
+    for (let attempt = 1; attempt <= RETRIES; attempt++) {
+      const r = await this.http.get('/csrf/', {
+        headers: { Cookie: this.cookies, Accept: 'application/json' }
+      });
+      if (r.status === 200) {
+        this._saveCookies(r);
+        if (this._csrftoken) return;
+      }
+      if (attempt < RETRIES) {
+        const wait = 3000 * attempt;
+        console.log(
+          `${ts()} ${C.yellow}⟳${C.reset} ${C.gray}[csrf ${attempt}/${RETRIES}]${C.reset}` +
+          ` HTTP ${r.status} — retry in ${wait / 1000}s...`
+        );
+        await sleep(wait);
+      }
+    }
+    throw new ServerError(`CSRF unavailable after ${RETRIES} attempts`);
   }
+
+  // ── Auth — retries up to 5x, verifies sessionid is actually set
+  async init() {
+    const RETRIES  = 5;
+    const DELAY_MS = 5000;
+
+    for (let attempt = 1; attempt <= RETRIES; attempt++) {
+      // Fresh CSRF token each attempt
+      try {
+        await this._getCsrf();
+      } catch (e) {
+        if (attempt < RETRIES) {
+          console.log(
+            `${ts()} ${C.yellow}⟳${C.reset} ${C.gray}[auth/csrf ${attempt}/${RETRIES}]${C.reset}` +
+            ` ${e.message} — retry in ${DELAY_MS / 1000}s...`
+          );
+          await sleep(DELAY_MS);
+          continue;
+        }
+        throw e;
+      }
+
+      const r = await this.http.post(
+        '/api/auth/wallet/',
+        { wallet_address: this.w.address.toLowerCase() },
+        { headers: this._headers(true) }
+      );
+      this._saveCookies(r);   // captures sessionid if server sets it
+
+      if (r.status === 200) {
+        if (!this._sessionid) {
+          // Server said 200 but didn't set sessionid — retry
+          if (attempt < RETRIES) {
+            console.log(
+              `${ts()} ${C.yellow}⟳${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
+              ` Auth 200 but no sessionid — retry in ${DELAY_MS / 1000}s...`
+            );
+            this._csrftoken = '';   // force fresh CSRF next round
+            await sleep(DELAY_MS);
+            continue;
+          }
+          throw new ServerError('Auth 200 but server did not set sessionid cookie');
+        }
+        // sessionid is safe in this._sessionid — refresh CSRF won't touch it
+        await this._getCsrf();
+        return r.data;
+      }
+
+      // 5xx / 429 — retry
+      if ([429, 500, 502, 503, 504].includes(r.status)) {
+        if (attempt < RETRIES) {
+          const wait = DELAY_MS * attempt;
+          console.log(
+            `${ts()} ${C.yellow}⟳${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
+            ` HTTP ${r.status} — retry in ${wait / 1000}s...`
+          );
+          await sleep(wait);
+          continue;
+        }
+        throw new ServerError(`Auth HTTP ${r.status} after ${RETRIES} attempts`);
+      }
+
+      // 4xx — not worth retrying
+      throw new Error(`Auth failed: HTTP ${r.status}`);
+    }
+  }
+
+  // ── Generic GET / POST
   async get(path) {
     const r = await withRetry(
       () => this.http.get(path, { headers: this._headers() }),
@@ -262,6 +359,8 @@ class ApiClient {
     this._saveCookies(r);
     return r.data;
   }
+
+  // ── Endpoint shortcuts
   faucetClaim()        { return this.post('/api/inception/faucet/'); }
   crateOpen()          { return this.post('/api/inception/crate/open/', { crate_name: 'daily' }); }
   sync(tx)             { return this.post('/api/inception/sync/', { tx_hash: tx || '0x' }); }
