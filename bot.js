@@ -3,7 +3,7 @@
  * - Proxy optional (API + RPC)
  * - Faucet  : 1x per 24 hours per wallet
  * - Crate   : 5x per 24 hours per wallet
- * - TX      : 15x per day per wallet
+ * - TX      : 5x per day per wallet
  * - Better output (timestamp, color, emoji, summary)
  * - Skip wallet on persistent server error
  */
@@ -35,7 +35,7 @@ const CFG = {
   loopMs:    6 * 60 * 60 * 1000, // check interval: 6 hours
   faucetMax: 1,                   // max faucet per 24 hours
   crateMax:  5,                   // max crate per 24 hours
-  txMax:     15,                  // max TX per 24 hours
+  txMax:     5,                  // max TX per 24 hours
   windowMs:  24 * 60 * 60 * 1000, // 24 hours in ms
 };
 
@@ -621,6 +621,7 @@ async function burnForQE(signer, api, addr, stats) {
 // ================= WALLET =================
 async function runWallet(pk, proxy, index, total, state) {
   const wallet   = new ethers.Wallet(pk);
+  const evm      = accounts.valid(pk);
   const addr     = wallet.address;
   const provider = createProvider(proxy);
   const signer   = wallet.connect(provider);
