@@ -39,7 +39,7 @@ const CFG = {
   windowMs:     24 * 60 * 60 * 1000, // 24 jam dalam ms
 };
 
-// ── Suppress ethers.js internal "JsonRpcProvider failed to detect network" spam
+// -- Suppress ethers.js internal "JsonRpcProvider failed to detect network" spam
 const _origWarn = console.warn.bind(console);
 console.warn = (...args) => {
   const msg = typeof args[0] === 'string' ? args[0] : '';
@@ -75,30 +75,30 @@ function ts() {
 function log(addr, msg, level = 'info') {
   const short = addr ? `${C.cyan}${C.bold}[${addr.slice(0,6)}..${addr.slice(-4)}]${C.reset}` : '';
   const prefix = {
-    info:    `${C.blue}ℹ${C.reset}`,
-    ok:      `${C.green}✔${C.reset}`,
-    warn:    `${C.yellow}⚠${C.reset}`,
-    error:   `${C.red}✘${C.reset}`,
-    skip:    `${C.yellow}⏭${C.reset}`,
-    send:    `${C.magenta}➤${C.reset}`,
-    start:   `${C.cyan}▶${C.reset}`,
+    info:    `${C.blue}?${C.reset}`,
+    ok:      `${C.green}?${C.reset}`,
+    warn:    `${C.yellow}?${C.reset}`,
+    error:   `${C.red}?${C.reset}`,
+    skip:    `${C.yellow}?${C.reset}`,
+    send:    `${C.magenta}?${C.reset}`,
+    start:   `${C.cyan}?${C.reset}`,
   }[level] || '•';
   console.log(`${ts()} ${prefix} ${short} ${msg}`);
 }
 
-function divider(char = '─', len = 55) {
+function divider(char = '-', len = 55) {
   console.log(C.gray + char.repeat(len) + C.reset);
 }
 
 function logSummary(addr, stats) {
   divider();
-  console.log(`${ts()} ${C.bold}${C.cyan}📊 SUMMARY [${addr.slice(0,6)}..${addr.slice(-4)}]${C.reset}`);
-  console.log(`   ${C.green}✔ TX Sent   :${C.reset} ${stats.txSent}/${stats.txTotal}`);
-  console.log(`   ${stats.faucet ? C.green+'✔' : C.yellow+'✘'} Faucet    :${C.reset} ${stats.faucet || 'skipped'}`);
-  console.log(`   ${stats.crate  ? C.green+'✔' : C.yellow+'✘'} Crate     :${C.reset} ${stats.crate  || 'skipped'}`);
-  console.log(`   ${stats.burn   ? C.green+'✔' : C.yellow+'✘'} Burn      :${C.reset} ${stats.burn   || 'skipped'}`);
-  console.log(`   ${C.blue}ℹ QE Balance:${C.reset} ${stats.qe ?? '-'}`);
-  console.log(`   ${C.blue}ℹ Badges    :${C.reset} ${stats.badges}`);
+  console.log(`${ts()} ${C.bold}${C.cyan}?? SUMMARY [${addr.slice(0,6)}..${addr.slice(-4)}]${C.reset}`);
+  console.log(`   ${C.green}? TX Sent   :${C.reset} ${stats.txSent}/${stats.txTotal}`);
+  console.log(`   ${stats.faucet ? C.green+'?' : C.yellow+'?'} Faucet    :${C.reset} ${stats.faucet || 'skipped'}`);
+  console.log(`   ${stats.crate  ? C.green+'?' : C.yellow+'?'} Crate     :${C.reset} ${stats.crate  || 'skipped'}`);
+  console.log(`   ${stats.burn   ? C.green+'?' : C.yellow+'?'} Burn      :${C.reset} ${stats.burn   || 'skipped'}`);
+  console.log(`   ${C.blue}? QE Balance:${C.reset} ${stats.qe ?? '-'}`);
+  console.log(`   ${C.blue}? Badges    :${C.reset} ${stats.badges}`);
   divider();
 }
 
@@ -134,7 +134,7 @@ async function withRetry(fn, { retries = 3, delayMs = 3000, label = '' } = {}) {
             throw new ServerError(`HTTP ${status} after ${retries} attempts (${label})`);
           }
           const wait = delayMs * attempt;
-          console.log(`${ts()} ${C.yellow}⟳${C.reset} ${C.gray}[retry]${C.reset} ${label} HTTP ${status} — retry in ${wait}ms (${attempt}/${retries})`);
+          console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[retry]${C.reset} ${label} HTTP ${status} — retry in ${wait}ms (${attempt}/${retries})`);
           await sleep(wait);
           continue;
         }
@@ -145,7 +145,7 @@ async function withRetry(fn, { retries = 3, delayMs = 3000, label = '' } = {}) {
       lastErr = e;
       if (!isServerError(e) || attempt === retries) throw e;
       const wait = delayMs * attempt;
-      console.log(`${ts()} ${C.yellow}⟳${C.reset} ${C.gray}[retry]${C.reset} ${label} — ${e.message} — retry in ${wait}ms (${attempt}/${retries})`);
+      console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[retry]${C.reset} ${label} — ${e.message} — retry in ${wait}ms (${attempt}/${retries})`);
       await sleep(wait);
     }
   }
@@ -219,7 +219,7 @@ class ApiClient {
     });
   }
 
-  // ── Cookie storage: parse Set-Cookie, keep sessionid & csrftoken separately
+  // -- Cookie storage: parse Set-Cookie, keep sessionid & csrftoken separately
   _saveCookies(res) {
     const set = res.headers['set-cookie'];
     if (!set) return;
@@ -234,7 +234,7 @@ class ApiClient {
     }
   }
 
-  // ── Cookie header always rebuilt from stored values (no string mutation)
+  // -- Cookie header always rebuilt from stored values (no string mutation)
   get cookies() {
     const parts = [];
     if (this._csrftoken) parts.push(`csrftoken=${this._csrftoken}`);
@@ -242,7 +242,7 @@ class ApiClient {
     return parts.join('; ');
   }
 
-  // ── Request headers
+  // -- Request headers
   _headers(post = false) {
     const h = { Cookie: this.cookies, Accept: 'application/json' };
     if (post) {
@@ -253,7 +253,7 @@ class ApiClient {
     return h;
   }
 
-  // ── CSRF bootstrap — retries up to 5x (server intermittently returns 500)
+  // -- CSRF bootstrap — retries up to 5x (server intermittently returns 500)
   async _getCsrf() {
     const RETRIES = 5;
     for (let attempt = 1; attempt <= RETRIES; attempt++) {
@@ -267,7 +267,7 @@ class ApiClient {
       if (attempt < RETRIES) {
         const wait = 3000 * attempt;
         console.log(
-          `${ts()} ${C.yellow}⟳${C.reset} ${C.gray}[csrf ${attempt}/${RETRIES}]${C.reset}` +
+          `${ts()} ${C.yellow}?${C.reset} ${C.gray}[csrf ${attempt}/${RETRIES}]${C.reset}` +
           ` HTTP ${r.status} — retry in ${wait / 1000}s...`
         );
         await sleep(wait);
@@ -276,7 +276,7 @@ class ApiClient {
     throw new ServerError(`CSRF unavailable after ${RETRIES} attempts`);
   }
 
-  // ── Auth — retries up to 5x, verifies sessionid is actually set
+  // -- Auth — retries up to 5x, verifies sessionid is actually set
   async init() {
     const RETRIES  = 5;
     const DELAY_MS = 5000;
@@ -288,7 +288,7 @@ class ApiClient {
       } catch (e) {
         if (attempt < RETRIES) {
           console.log(
-            `${ts()} ${C.yellow}⟳${C.reset} ${C.gray}[auth/csrf ${attempt}/${RETRIES}]${C.reset}` +
+            `${ts()} ${C.yellow}?${C.reset} ${C.gray}[auth/csrf ${attempt}/${RETRIES}]${C.reset}` +
             ` ${e.message} — retry in ${DELAY_MS / 1000}s...`
           );
           await sleep(DELAY_MS);
@@ -309,7 +309,7 @@ class ApiClient {
           // Server said 200 but didn't set sessionid — retry
           if (attempt < RETRIES) {
             console.log(
-              `${ts()} ${C.yellow}⟳${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
+              `${ts()} ${C.yellow}?${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
               ` Auth 200 but no sessionid — retry in ${DELAY_MS / 1000}s...`
             );
             this._csrftoken = '';   // force fresh CSRF next round
@@ -328,7 +328,7 @@ class ApiClient {
         if (attempt < RETRIES) {
           const wait = DELAY_MS * attempt;
           console.log(
-            `${ts()} ${C.yellow}⟳${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
+            `${ts()} ${C.yellow}?${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
             ` HTTP ${r.status} — retry in ${wait / 1000}s...`
           );
           await sleep(wait);
@@ -342,7 +342,7 @@ class ApiClient {
     }
   }
 
-  // ── Generic GET / POST
+  // -- Generic GET / POST
   async get(path) {
     const r = await withRetry(
       () => this.http.get(path, { headers: this._headers() }),
@@ -360,7 +360,7 @@ class ApiClient {
     return r.data;
   }
 
-  // ── Endpoint shortcuts
+  // -- Endpoint shortcuts
   faucetClaim()        { return this.post('/api/inception/faucet/'); }
   crateOpen()          { return this.post('/api/inception/crate/open/', { crate_name: 'daily' }); }
   sync(tx)             { return this.post('/api/inception/sync/', { tx_hash: tx || '0x' }); }
@@ -435,7 +435,7 @@ async function sendTxs(signer, api, addr, stats, daily) {
       );
       sent++;
       daily.txCount++;
-      log(addr, `TX ${i+1}/${txCount} ${C.green}✔${C.reset} → ${to.slice(0,8)}... | hash: ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
+      log(addr, `TX ${i+1}/${txCount} ${C.green}?${C.reset} ? ${to.slice(0,8)}... | hash: ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
       await api.sync(tx.hash).catch(() => {});
       await sleep(2000 + Math.random() * 3000);
     } catch (e) {
@@ -575,7 +575,7 @@ async function mintBadges(signer, api, addr, stats) {
           { label: `badge.${fn}(${badgeName})` }
         );
         await withRetry(() => tx.wait(), { label: `badge.${fn}.wait` });
-        log(addr, `Badge on-chain ${fn}() [${C.bold}${badgeName}${C.reset}] ✔ — ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
+        log(addr, `Badge on-chain ${fn}() [${C.bold}${badgeName}${C.reset}] ? — ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
         onChainOk = true;
         minted++;
       } catch (e) {
@@ -643,7 +643,7 @@ async function runWallet(pk, proxy, index, total, state) {
 
   const stats = { txSent: 0, txTotal: CFG.txMax, faucet: '', crate: '', burn: '', qe: null, badges: '0' };
 
-  divider('═');
+  divider('-');
   log(addr, `Wallet ${C.bold}${index}/${total}${C.reset} | ${proxy ? `proxy ${C.dim}${proxy.slice(0,20)}...${C.reset}` : 'direct'}`, 'start');
   log(addr,
     `Daily progress — Faucet: ${daily.faucetCount}/${CFG.faucetMax} | Crate: ${daily.crateCount}/${CFG.crateMax} | TX: ${daily.txCount}/${CFG.txMax}`,
@@ -704,12 +704,12 @@ function loadKeys() {
 async function runAll() {
   const keys    = loadKeys();
   const proxies = loadProxies();
-  const state   = loadState();  // ← load state di awal cycle
+  const state   = loadState();  // ? load state di awal cycle
 
-  console.log(`\n${C.bold}${C.cyan}${'═'.repeat(55)}${C.reset}`);
+  console.log(`\n${C.bold}${C.cyan}${'-'.repeat(55)}${C.reset}`);
   console.log(`${C.bold}${C.cyan}  DAC Inception Bot — ${keys.length} wallet(s) loaded${C.reset}`);
   console.log(`${C.bold}${C.cyan}  Faucet: ${CFG.faucetMax}x/day | Crate: ${CFG.crateMax}x/day | TX: ${CFG.txMax}x/day${C.reset}`);
-  console.log(`${C.bold}${C.cyan}${'═'.repeat(55)}${C.reset}\n`);
+  console.log(`${C.bold}${C.cyan}${'-'.repeat(55)}${C.reset}\n`);
 
   let done = 0, skipped = 0;
 
@@ -719,16 +719,16 @@ async function runAll() {
       await runWallet(keys[i], proxy, i + 1, keys.length, state);
       done++;
     } catch (e) {
-      console.log(`${ts()} ${C.red}✘${C.reset} Wallet ${i+1} unexpected error — skip: ${e.message}`);
+      console.log(`${ts()} ${C.red}?${C.reset} Wallet ${i+1} unexpected error — skip: ${e.message}`);
       skipped++;
     }
-    saveState(state);  // ← simpan state setelah setiap wallet
+    saveState(state);  // ? simpan state setelah setiap wallet
     await sleep(3000 + Math.random() * 3000);
   }
 
-  divider('═');
-  console.log(`${ts()} ${C.bold}${C.green}✅ Cycle done — ${done} OK, ${skipped} skipped${C.reset}`);
-  divider('═');
+  divider('-');
+  console.log(`${ts()} ${C.bold}${C.green}? Cycle done — ${done} OK, ${skipped} skipped${C.reset}`);
+  divider('-');
   console.log();
 }
 
@@ -736,7 +736,7 @@ async function runAll() {
 (async () => {
   let cycle = 1;
   while (true) {
-    console.log(`${ts()} ${C.bold}${C.magenta}🔄 Starting cycle #${cycle}${C.reset}`);
+    console.log(`${ts()} ${C.bold}${C.magenta}?? Starting cycle #${cycle}${C.reset}`);
     await runAll();
     cycle++;
     console.log(`${ts()} ${C.dim}Next cycle in ${CFG.loopMs / 60000} min...${C.reset}\n`);
