@@ -1,8 +1,8 @@
 /**
  * DAC Inception — Daily Multi-Wallet Bot (Improved)
  * - Proxy optional (API + RPC)
- * - Faucet  : 1x per 24 jam per wallet
- * - Crate   : 5x per 24 jam per wallet
+ * - Faucet  : 1x per 24 hours per wallet
+ * - Crate   : 5x per 24 hours per wallet
  * - TX      : 15x per day per wallet
  * - Better output (timestamp, color, emoji, summary)
  * - Skip wallet on persistent server error
@@ -16,27 +16,27 @@ const { HttpsProxyAgent } = require('https-proxy-agent');
 
 // ================= CONFIG =================
 const DIR = __dirname;
-const PK_FILE     = path.join(DIR, 'pk.txt');
-const ADDRESS_FILE= path.join(DIR, 'address.txt');
-const PROXY_FILE  = path.join(DIR, 'proxy.txt');
-const STATE_FILE  = path.join(DIR, 'state.json');
+const PK_FILE      = path.join(DIR, 'pk.txt');
+const ADDRESS_FILE = path.join(DIR, 'address.txt');
+const PROXY_FILE   = path.join(DIR, 'proxy.txt');
+const STATE_FILE   = path.join(DIR, 'state.json');
 const CFG = {
-  rpc:            'https://rpctest.dachain.tech',
-  chainId:        21894,
-  api:            'https://inception.dachain.io',
-  qeContract:     '0x3691A78bE270dB1f3b1a86177A8f23F89A8Cef24',
-  qeAbi:          ['function burnForQE() payable'],
-  badgeContract:  '0xB36ab4c2Bd6aCfC36e9D6c53F39F4301901Bd647',
+  rpc:           'https://rpctest.dachain.tech',
+  chainId:       21894,
+  api:           'https://inception.dachain.io',
+  qeContract:    '0x3691A78bE270dB1f3b1a86177A8f23F89A8Cef24',
+  qeAbi:         ['function burnForQE() payable'],
+  badgeContract: '0xB36ab4c2Bd6aCfC36e9D6c53F39F4301901Bd647',
   badgeAbi: [
     'function mint(uint256 badgeId) external',
     'function claim(uint256 badgeId) external',
     'function safeMint(address to, uint256 tokenId) external',
   ],
-  loopMs:       6 * 60 * 60 * 1000, // check interval: 6 jam
-  faucetMax:    1,               // max faucet per 24 jam
-  crateMax:     5,               // max crate per 24 jam
-  txMax:        15,              // max TX per 24 jam
-  windowMs:     24 * 60 * 60 * 1000, // 24 jam dalam ms
+  loopMs:    6 * 60 * 60 * 1000, // check interval: 6 hours
+  faucetMax: 1,                   // max faucet per 24 hours
+  crateMax:  5,                   // max crate per 24 hours
+  txMax:     15,                  // max TX per 24 hours
+  windowMs:  24 * 60 * 60 * 1000, // 24 hours in ms
 };
 
 // -- Suppress ethers.js internal "JsonRpcProvider failed to detect network" spam
@@ -56,32 +56,32 @@ process.stderr.write = (chunk, ...rest) => {
 
 // ================= LOGGER =================
 const C = {
-  reset:  '\x1b[0m',
-  bold:   '\x1b[1m',
-  dim:    '\x1b[2m',
-  cyan:   '\x1b[36m',
-  green:  '\x1b[32m',
-  yellow: '\x1b[33m',
-  red:    '\x1b[31m',
-  blue:   '\x1b[34m',
-  magenta:'\x1b[35m',
-  gray:   '\x1b[90m',
+  reset:   '\x1b[0m',
+  bold:    '\x1b[1m',
+  dim:     '\x1b[2m',
+  cyan:    '\x1b[36m',
+  green:   '\x1b[32m',
+  yellow:  '\x1b[33m',
+  red:     '\x1b[31m',
+  blue:    '\x1b[34m',
+  magenta: '\x1b[35m',
+  gray:    '\x1b[90m',
 };
 
 function ts() {
-  return C.gray + new Date().toLocaleTimeString('id-ID', { hour12: false }) + C.reset;
+  return C.gray + new Date().toLocaleTimeString('en-US', { hour12: false }) + C.reset;
 }
 
 function log(addr, msg, level = 'info') {
   const short = addr ? `${C.cyan}${C.bold}[${addr.slice(0,6)}..${addr.slice(-4)}]${C.reset}` : '';
   const prefix = {
-    info:    `${C.blue}?${C.reset}`,
-    ok:      `${C.green}?${C.reset}`,
-    warn:    `${C.yellow}?${C.reset}`,
-    error:   `${C.red}?${C.reset}`,
-    skip:    `${C.yellow}?${C.reset}`,
-    send:    `${C.magenta}?${C.reset}`,
-    start:   `${C.cyan}?${C.reset}`,
+    info:  `${C.blue}ℹ${C.reset}`,
+    ok:    `${C.green}✔${C.reset}`,
+    warn:  `${C.yellow}⚠${C.reset}`,
+    error: `${C.red}✖${C.reset}`,
+    skip:  `${C.yellow}⏭${C.reset}`,
+    send:  `${C.magenta}➤${C.reset}`,
+    start: `${C.cyan}▶${C.reset}`,
   }[level] || '•';
   console.log(`${ts()} ${prefix} ${short} ${msg}`);
 }
@@ -92,13 +92,13 @@ function divider(char = '-', len = 55) {
 
 function logSummary(addr, stats) {
   divider();
-  console.log(`${ts()} ${C.bold}${C.cyan}?? SUMMARY [${addr.slice(0,6)}..${addr.slice(-4)}]${C.reset}`);
-  console.log(`   ${C.green}? TX Sent   :${C.reset} ${stats.txSent}/${stats.txTotal}`);
-  console.log(`   ${stats.faucet ? C.green+'?' : C.yellow+'?'} Faucet    :${C.reset} ${stats.faucet || 'skipped'}`);
-  console.log(`   ${stats.crate  ? C.green+'?' : C.yellow+'?'} Crate     :${C.reset} ${stats.crate  || 'skipped'}`);
-  console.log(`   ${stats.burn   ? C.green+'?' : C.yellow+'?'} Burn      :${C.reset} ${stats.burn   || 'skipped'}`);
-  console.log(`   ${C.blue}? QE Balance:${C.reset} ${stats.qe ?? '-'}`);
-  console.log(`   ${C.blue}? Badges    :${C.reset} ${stats.badges}`);
+  console.log(`${ts()} ${C.bold}${C.cyan}📋 SUMMARY [${addr.slice(0,6)}..${addr.slice(-4)}]${C.reset}`);
+  console.log(`   ${C.green}✔ TX Sent   :${C.reset} ${stats.txSent}/${stats.txTotal}`);
+  console.log(`   ${stats.faucet ? C.green+'✔' : C.yellow+'⚠'} Faucet    :${C.reset} ${stats.faucet || 'skipped'}`);
+  console.log(`   ${stats.crate  ? C.green+'✔' : C.yellow+'⚠'} Crate     :${C.reset} ${stats.crate  || 'skipped'}`);
+  console.log(`   ${stats.burn   ? C.green+'✔' : C.yellow+'⚠'} Burn      :${C.reset} ${stats.burn   || 'skipped'}`);
+  console.log(`   ${C.blue}💎 QE Balance:${C.reset} ${stats.qe ?? '-'}`);
+  console.log(`   ${C.blue}🏅 Badges    :${C.reset} ${stats.badges}`);
   divider();
 }
 
@@ -134,7 +134,7 @@ async function withRetry(fn, { retries = 3, delayMs = 3000, label = '' } = {}) {
             throw new ServerError(`HTTP ${status} after ${retries} attempts (${label})`);
           }
           const wait = delayMs * attempt;
-          console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[retry]${C.reset} ${label} HTTP ${status} — retry in ${wait}ms (${attempt}/${retries})`);
+          console.log(`${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[retry]${C.reset} ${label} HTTP ${status} — retry in ${wait}ms (${attempt}/${retries})`);
           await sleep(wait);
           continue;
         }
@@ -145,7 +145,7 @@ async function withRetry(fn, { retries = 3, delayMs = 3000, label = '' } = {}) {
       lastErr = e;
       if (!isServerError(e) || attempt === retries) throw e;
       const wait = delayMs * attempt;
-      console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[retry]${C.reset} ${label} — ${e.message} — retry in ${wait}ms (${attempt}/${retries})`);
+      console.log(`${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[retry]${C.reset} ${label} — ${e.message} — retry in ${wait}ms (${attempt}/${retries})`);
       await sleep(wait);
     }
   }
@@ -164,8 +164,8 @@ function saveState(state) {
 }
 
 /**
- * Ambil state harian untuk satu wallet.
- * Reset otomatis jika sudah melewati 24 jam dari windowStart.
+ * Get the daily state for a single wallet.
+ * Automatically resets if 24 hours have passed since windowStart.
  */
 function getDailyState(state, addr) {
   const key = addr.toLowerCase();
@@ -267,7 +267,7 @@ class ApiClient {
       if (attempt < RETRIES) {
         const wait = 3000 * attempt;
         console.log(
-          `${ts()} ${C.yellow}?${C.reset} ${C.gray}[csrf ${attempt}/${RETRIES}]${C.reset}` +
+          `${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[csrf ${attempt}/${RETRIES}]${C.reset}` +
           ` HTTP ${r.status} — retry in ${wait / 1000}s...`
         );
         await sleep(wait);
@@ -288,7 +288,7 @@ class ApiClient {
       } catch (e) {
         if (attempt < RETRIES) {
           console.log(
-            `${ts()} ${C.yellow}?${C.reset} ${C.gray}[auth/csrf ${attempt}/${RETRIES}]${C.reset}` +
+            `${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[auth/csrf ${attempt}/${RETRIES}]${C.reset}` +
             ` ${e.message} — retry in ${DELAY_MS / 1000}s...`
           );
           await sleep(DELAY_MS);
@@ -309,7 +309,7 @@ class ApiClient {
           // Server said 200 but didn't set sessionid — retry
           if (attempt < RETRIES) {
             console.log(
-              `${ts()} ${C.yellow}?${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
+              `${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
               ` Auth 200 but no sessionid — retry in ${DELAY_MS / 1000}s...`
             );
             this._csrftoken = '';   // force fresh CSRF next round
@@ -328,7 +328,7 @@ class ApiClient {
         if (attempt < RETRIES) {
           const wait = DELAY_MS * attempt;
           console.log(
-            `${ts()} ${C.yellow}?${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
+            `${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
             ` HTTP ${r.status} — retry in ${wait / 1000}s...`
           );
           await sleep(wait);
@@ -361,13 +361,13 @@ class ApiClient {
   }
 
   // -- Endpoint shortcuts
-  faucetClaim()        { return this.post('/api/inception/faucet/'); }
-  crateOpen()          { return this.post('/api/inception/crate/open/', { crate_name: 'daily' }); }
-  sync(tx)             { return this.post('/api/inception/sync/', { tx_hash: tx || '0x' }); }
-  profile()            { return this.get('/api/inception/profile/'); }
-  confirmBurn(tx)      { return this.post('/api/inception/exchange/confirm-burn/', { tx_hash: tx }); }
-  badgeList()          { return this.get('/api/inception/badge/'); }
-  mintBadgeApi(badgeId){ return this.post('/api/inception/badge/mint/', { badge_id: badgeId }); }
+  faucetClaim()         { return this.post('/api/inception/faucet/'); }
+  crateOpen()           { return this.post('/api/inception/crate/open/', { crate_name: 'daily' }); }
+  sync(tx)              { return this.post('/api/inception/sync/', { tx_hash: tx || '0x' }); }
+  profile()             { return this.get('/api/inception/profile/'); }
+  confirmBurn(tx)       { return this.post('/api/inception/exchange/confirm-burn/', { tx_hash: tx }); }
+  badgeList()           { return this.get('/api/inception/badge/'); }
+  mintBadgeApi(badgeId) { return this.post('/api/inception/badge/mint/', { badge_id: badgeId }); }
 }
 
 // ================= ADDRESS =================
@@ -391,7 +391,7 @@ function pickRecipient(list, self) {
 async function sendTxs(signer, api, addr, stats, daily) {
   const provider = signer.provider;
 
-  // Cek sisa TX hari ini
+  // Check remaining TX quota for today
   const remaining = CFG.txMax - daily.txCount;
   if (remaining <= 0) {
     log(addr, `TX limit reached (${CFG.txMax}/day) — skip TX`, 'skip');
@@ -420,8 +420,8 @@ async function sendTxs(signer, api, addr, stats, daily) {
     return;
   }
 
-  const targets  = loadAddresses();
-  const txCount  = remaining;
+  const targets = loadAddresses();
+  const txCount = remaining;
   log(addr, `Sending ${C.bold}${txCount} TX${C.reset} (${daily.txCount}/${CFG.txMax} used today)...`, 'send');
 
   let sent = 0;
@@ -435,7 +435,7 @@ async function sendTxs(signer, api, addr, stats, daily) {
       );
       sent++;
       daily.txCount++;
-      log(addr, `TX ${i+1}/${txCount} ${C.green}?${C.reset} ? ${to.slice(0,8)}... | hash: ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
+      log(addr, `TX ${i+1}/${txCount} ${C.green}✔${C.reset} → ${to.slice(0,8)}... | hash: ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
       await api.sync(tx.hash).catch(() => {});
       await sleep(2000 + Math.random() * 3000);
     } catch (e) {
@@ -575,7 +575,7 @@ async function mintBadges(signer, api, addr, stats) {
           { label: `badge.${fn}(${badgeName})` }
         );
         await withRetry(() => tx.wait(), { label: `badge.${fn}.wait` });
-        log(addr, `Badge on-chain ${fn}() [${C.bold}${badgeName}${C.reset}] ? — ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
+        log(addr, `Badge on-chain ${fn}() [${C.bold}${badgeName}${C.reset}] ✔ — ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
         onChainOk = true;
         minted++;
       } catch (e) {
@@ -626,10 +626,10 @@ async function runWallet(pk, proxy, index, total, state) {
   const signer   = wallet.connect(provider);
   const api      = new ApiClient(wallet, proxy);
 
-  // Load / reset daily state untuk wallet ini
+  // Load / reset daily state for this wallet
   const daily = getDailyState(state, addr);
 
-  // Cek apakah semua task hari ini sudah selesai
+  // Check if all daily tasks are already completed
   const allDone =
     daily.faucetCount >= CFG.faucetMax &&
     daily.crateCount  >= CFG.crateMax  &&
@@ -704,7 +704,7 @@ function loadKeys() {
 async function runAll() {
   const keys    = loadKeys();
   const proxies = loadProxies();
-  const state   = loadState();  // ? load state di awal cycle
+  const state   = loadState();  // load state at the start of each cycle
 
   console.log(`\n${C.bold}${C.cyan}${'-'.repeat(55)}${C.reset}`);
   console.log(`${C.bold}${C.cyan}  DAC Inception Bot — ${keys.length} wallet(s) loaded${C.reset}`);
@@ -719,24 +719,24 @@ async function runAll() {
       await runWallet(keys[i], proxy, i + 1, keys.length, state);
       done++;
     } catch (e) {
-      console.log(`${ts()} ${C.red}?${C.reset} Wallet ${i+1} unexpected error — skip: ${e.message}`);
+      console.log(`${ts()} ${C.red}✖${C.reset} Wallet ${i+1} unexpected error — skip: ${e.message}`);
       skipped++;
     }
-    saveState(state);  // ? simpan state setelah setiap wallet
+    saveState(state);  // save state after each wallet
     await sleep(3000 + Math.random() * 3000);
   }
 
   divider('-');
-  console.log(`${ts()} ${C.bold}${C.green}? Cycle done — ${done} OK, ${skipped} skipped${C.reset}`);
+  console.log(`${ts()} ${C.bold}${C.green}✔ Cycle done — ${done} OK, ${skipped} skipped${C.reset}`);
   divider('-');
   console.log();
 }
 
-// LOOP
+// ================= LOOP =================
 (async () => {
   let cycle = 1;
   while (true) {
-    console.log(`${ts()} ${C.bold}${C.magenta}?? Starting cycle #${cycle}${C.reset}`);
+    console.log(`${ts()} ${C.bold}${C.magenta}🚀 Starting cycle #${cycle}${C.reset}`);
     await runAll();
     cycle++;
     console.log(`${ts()} ${C.dim}Next cycle in ${CFG.loopMs / 60000} min...${C.reset}\n`);
