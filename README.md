@@ -33,8 +33,8 @@ An automated bot to perform daily on-chain activities on the **DAC Inception Tes
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/dac-inception-bot.git
-cd dac-inception-bot
+git clone https://github.com/shellproject318-wq/dachain-testnet-automation-bot.git
+cd dachain-testnet-automation-bot
 ```
 
 ### 2. Install Dependencies
