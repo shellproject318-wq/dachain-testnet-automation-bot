@@ -1,9 +1,7 @@
 /**
  * DAC Inception — Daily Multi-Wallet Bot (Improved)
  * - Proxy optional (API + RPC)
- * - Faucet  : 1x per 24 hours per wallet
- * - Crate   : 5x per 24 hours per wallet
- * - TX      : 5x per day per wallet
+ * - TX fixed 5x per wallet
  * - Better output (timestamp, color, emoji, summary)
  * - Skip wallet on persistent server error
  */
@@ -16,72 +14,91 @@ const { HttpsProxyAgent } = require('https-proxy-agent');
 
 // ================= CONFIG =================
 const DIR = __dirname;
-const PK_FILE      = path.join(DIR, 'pk.txt');
-const ADDRESS_FILE = path.join(DIR, 'address.txt');
-const PROXY_FILE   = path.join(DIR, 'proxy.txt');
-const STATE_FILE   = path.join(DIR, 'state.json');
+const PK_FILE     = path.join(DIR, 'pk.txt');
+const ADDRESS_FILE= path.join(DIR, 'address.txt');
+const PROXY_FILE  = path.join(DIR, 'proxy.txt');
+const STATE_FILE  = path.join(DIR, 'state.json');
 const CFG = {
-  rpc:           'https://rpctest.dachain.tech',
-  chainId:       21894,
-  api:           'https://inception.dachain.io',
-  qeContract:    '0x3691A78bE270dB1f3b1a86177A8f23F89A8Cef24',
-  qeAbi:         ['function burnForQE() payable'],
-  badgeContract: '0xB36ab4c2Bd6aCfC36e9D6c53F39F4301901Bd647',
+  rpc:            'https://rpctest.dachain.tech',
+  chainId:        21894,
+  api:            'https://inception.dachain.io',
+  qeContract:     '0x3691A78bE270dB1f3b1a86177A8f23F89A8Cef24',
+  qeAbi:          ['function burnForQE() payable'],
+  badgeContract:  '0xB36ab4c2Bd6aCfC36e9D6c53F39F4301901Bd647',
   badgeAbi: [
     'function mint(uint256 badgeId) external',
     'function claim(uint256 badgeId) external',
     'function safeMint(address to, uint256 tokenId) external',
   ],
-  loopMs:    6 * 60 * 60 * 1000, // check interval: 6 hours
-  faucetMax: 1,                   // max faucet per 24 hours
-  crateMax:  5,                   // max crate per 24 hours
-  txMax:     5,                  // max TX per 24 hours
-  windowMs:  24 * 60 * 60 * 1000, // 24 hours in ms
+  loopMinHr:     4,   // min loop hours
+  loopMaxHr:     8,   // max loop hours
+  qcrateMax:     5,   // max quantum crate opens per 24 hours (server limit: 5)
 };
 
-// -- Suppress ethers.js internal "JsonRpcProvider failed to detect network" spam
-const _origWarn = console.warn.bind(console);
-console.warn = (...args) => {
-  const msg = typeof args[0] === 'string' ? args[0] : '';
-  if (msg.includes('JsonRpcProvider') || msg.includes('failed to detect network')) return;
-  _origWarn(...args);
-};
-// ethers v6 uses process.stderr for some internals — suppress known noise
-const _origStdErr = process.stderr.write.bind(process.stderr);
-process.stderr.write = (chunk, ...rest) => {
-  const s = typeof chunk === 'string' ? chunk : chunk.toString();
-  if (s.includes('JsonRpcProvider') || s.includes('failed to detect network')) return true;
-  return _origStdErr(chunk, ...rest);
-};
+// ================= GLOBAL ERROR GUARD =================
+// Prevents bot from crashing on 500/504 RPC errors thrown internally by ethers.js
+// These escape try/catch because they are emitted outside the awaited promise chain.
+process.on('unhandledRejection', (err) => {
+  const msg  = err?.message || String(err);
+  const code = err?.code    || '';
+  if (
+    /500|502|503|504|timeout|econnreset|econnrefused|enotfound|network|socket|server_error/i.test(msg) ||
+    /SERVER_ERROR|NETWORK_ERROR|TIMEOUT/i.test(code)
+  ) {
+    console.log(
+      `\x1b[90m[${new Date().toLocaleTimeString('en-US', { hour12: false })}]\x1b[0m` +
+      ` \x1b[33m?\x1b[0m \x1b[2m[unhandledRejection]\x1b[0m RPC error suppressed: ${msg.split('\n')[0]}`
+    );
+  } else {
+    console.error(`\x1b[31m? [unhandledRejection]\x1b[0m`, msg);
+  }
+});
+
+process.on('uncaughtException', (err) => {
+  const msg  = err?.message || String(err);
+  const code = err?.code    || '';
+  if (
+    /500|502|503|504|timeout|econnreset|econnrefused|enotfound|network|socket|server_error/i.test(msg) ||
+    /SERVER_ERROR|NETWORK_ERROR|TIMEOUT/i.test(code)
+  ) {
+    console.log(
+      `\x1b[90m[${new Date().toLocaleTimeString('en-US', { hour12: false })}]\x1b[0m` +
+      ` \x1b[33m?\x1b[0m \x1b[2m[uncaughtException]\x1b[0m RPC error suppressed: ${msg.split('\n')[0]}`
+    );
+  } else {
+    console.error(`\x1b[31m? [uncaughtException]\x1b[0m`, msg);
+    process.exit(1); // only exit on truly unexpected errors
+  }
+});
 
 // ================= LOGGER =================
 const C = {
-  reset:   '\x1b[0m',
-  bold:    '\x1b[1m',
-  dim:     '\x1b[2m',
-  cyan:    '\x1b[36m',
-  green:   '\x1b[32m',
-  yellow:  '\x1b[33m',
-  red:     '\x1b[31m',
-  blue:    '\x1b[34m',
-  magenta: '\x1b[35m',
-  gray:    '\x1b[90m',
+  reset:  '\x1b[0m',
+  bold:   '\x1b[1m',
+  dim:    '\x1b[2m',
+  cyan:   '\x1b[36m',
+  green:  '\x1b[32m',
+  yellow: '\x1b[33m',
+  red:    '\x1b[31m',
+  blue:   '\x1b[34m',
+  magenta:'\x1b[35m',
+  gray:   '\x1b[90m',
 };
 
 function ts() {
-  return C.gray + new Date().toLocaleTimeString('en-US', { hour12: false }) + C.reset;
+  return C.gray + new Date().toLocaleTimeString('id-ID', { hour12: false }) + C.reset;
 }
 
 function log(addr, msg, level = 'info') {
   const short = addr ? `${C.cyan}${C.bold}[${addr.slice(0,6)}..${addr.slice(-4)}]${C.reset}` : '';
   const prefix = {
-    info:  `${C.blue}ℹ${C.reset}`,
-    ok:    `${C.green}✔${C.reset}`,
-    warn:  `${C.yellow}⚠${C.reset}`,
-    error: `${C.red}✖${C.reset}`,
-    skip:  `${C.yellow}⏭${C.reset}`,
-    send:  `${C.magenta}➤${C.reset}`,
-    start: `${C.cyan}▶${C.reset}`,
+    info:    `${C.blue}?${C.reset}`,
+    ok:      `${C.green}?${C.reset}`,
+    warn:    `${C.yellow}?${C.reset}`,
+    error:   `${C.red}?${C.reset}`,
+    skip:    `${C.yellow}?${C.reset}`,
+    send:    `${C.magenta}?${C.reset}`,
+    start:   `${C.cyan}?${C.reset}`,
   }[level] || '•';
   console.log(`${ts()} ${prefix} ${short} ${msg}`);
 }
@@ -92,13 +109,13 @@ function divider(char = '-', len = 55) {
 
 function logSummary(addr, stats) {
   divider();
-  console.log(`${ts()} ${C.bold}${C.cyan}📋 SUMMARY [${addr.slice(0,6)}..${addr.slice(-4)}]${C.reset}`);
-  console.log(`   ${C.green}✔ TX Sent   :${C.reset} ${stats.txSent}/${stats.txTotal}`);
-  console.log(`   ${stats.faucet ? C.green+'✔' : C.yellow+'⚠'} Faucet    :${C.reset} ${stats.faucet || 'skipped'}`);
-  console.log(`   ${stats.crate  ? C.green+'✔' : C.yellow+'⚠'} Crate     :${C.reset} ${stats.crate  || 'skipped'}`);
-  console.log(`   ${stats.burn   ? C.green+'✔' : C.yellow+'⚠'} Burn      :${C.reset} ${stats.burn   || 'skipped'}`);
-  console.log(`   ${C.blue}💎 QE Balance:${C.reset} ${stats.qe ?? '-'}`);
-  console.log(`   ${C.blue}🏅 Badges    :${C.reset} ${stats.badges}`);
+  console.log(`${ts()} ${C.bold}${C.cyan}?? SUMMARY [${addr.slice(0,6)}..${addr.slice(-4)}]${C.reset}`);
+  console.log(`   ${C.green}? TX Sent      :${C.reset} ${stats.txSent}/${stats.txTotal}`);
+  console.log(`   ${stats.faucet ? C.green+'?' : C.yellow+'?'} Faucet       :${C.reset} ${stats.faucet || 'skipped'}`);
+  console.log(`   ${stats.qcrate ? C.green+'?' : C.yellow+'?'} Quantum Crate:${C.reset} ${stats.qcrate || 'skipped'}`);
+  console.log(`   ${stats.burn   ? C.green+'?' : C.yellow+'?'} Burn         :${C.reset} ${stats.burn   || 'skipped'}`);
+  console.log(`   ${C.blue}? QE Balance  :${C.reset} ${stats.qe ?? '-'}`);
+  console.log(`   ${C.blue}? Badges      :${C.reset} ${stats.badges}`);
   divider();
 }
 
@@ -107,6 +124,7 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// Check if error is a server-side / network error (safe to skip)
 function isServerError(e) {
   if (!e) return false;
   const serverCodes = [
@@ -118,67 +136,48 @@ function isServerError(e) {
   return /timeout|econnreset|econnrefused|enotfound|network|socket|rate.?limit|503|502|504|500|429/i.test(e.message || '');
 }
 
+// Retry wrapper — on persistent server error throws ServerError so caller can skip
 class ServerError extends Error {
   constructor(msg) { super(msg); this.name = 'ServerError'; }
 }
 
-async function withRetry(fn, { retries = 3, delayMs = 3000, label = '' } = {}) {
+async function withRetry(fn, { retries = 5, label = '' } = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const result = await fn();
+
+      // axios response object — retry on retryable HTTP status codes
       if (result && typeof result === 'object' && 'status' in result && 'data' in result) {
         const status = result.status;
         if ([429, 500, 502, 503, 504].includes(status)) {
           if (attempt === retries) {
             throw new ServerError(`HTTP ${status} after ${retries} attempts (${label})`);
           }
-          const wait = delayMs * attempt;
-          console.log(`${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[retry]${C.reset} ${label} HTTP ${status} — retry in ${wait}ms (${attempt}/${retries})`);
+          const wait = 2000 + Math.floor(Math.random() * 8000);
+          console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[retry ${attempt}/${retries}]${C.reset} ${label} HTTP ${status} — wait ${wait / 1000}s`);
           await sleep(wait);
           continue;
         }
       }
+
       return result;
     } catch (e) {
-      if (e instanceof ServerError) throw e;
+      if (e instanceof ServerError) throw e; // already wrapped, propagate
+
       lastErr = e;
-      if (!isServerError(e) || attempt === retries) throw e;
-      const wait = delayMs * attempt;
-      console.log(`${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[retry]${C.reset} ${label} — ${e.message} — retry in ${wait}ms (${attempt}/${retries})`);
+      if (!isServerError(e) || attempt === retries) {
+        // Wrap in ServerError if it's a server-type error so callers can detect it
+        if (isServerError(e)) throw new ServerError(`${label} failed after ${retries} attempts: ${e.message}`);
+        throw e;
+      }
+
+      const wait = 2000 + Math.floor(Math.random() * 8000);
+      console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[retry ${attempt}/${retries}]${C.reset} ${label} — ${e.shortMessage || e.message?.split('\n')[0]} — wait ${wait / 1000}s`);
       await sleep(wait);
     }
   }
   throw new ServerError(`Server unreachable after ${retries} retries (${label}): ${lastErr?.message}`);
-}
-
-// ================= STATE (per-wallet daily tracking) =================
-function loadState() {
-  if (!fs.existsSync(STATE_FILE)) return {};
-  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); }
-  catch { return {}; }
-}
-
-function saveState(state) {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
-}
-
-/**
- * Get the daily state for a single wallet.
- * Automatically resets if 24 hours have passed since windowStart.
- */
-function getDailyState(state, addr) {
-  const key = addr.toLowerCase();
-  const now  = Date.now();
-  if (!state[key] || (now - state[key].windowStart) >= CFG.windowMs) {
-    state[key] = {
-      windowStart: now,
-      faucetCount: 0,
-      crateCount:  0,
-      txCount:     0,
-    };
-  }
-  return state[key];
 }
 
 // ================= PROXY =================
@@ -195,154 +194,82 @@ function createProxyAgent(proxy) {
   return new HttpsProxyAgent(proxy);
 }
 function createProvider(proxy) {
-  if (!proxy) return new ethers.JsonRpcProvider(CFG.rpc);
-  const agent = createProxyAgent(proxy);
-  const fetchReq = new ethers.FetchRequest(CFG.rpc);
-  fetchReq.getUrlFunc = ethers.FetchRequest.createGetUrlFunc({ agent });
-  return new ethers.JsonRpcProvider(fetchReq);
+  let provider;
+  if (!proxy) {
+    provider = new ethers.JsonRpcProvider(CFG.rpc);
+  } else {
+    const agent = createProxyAgent(proxy);
+    const fetchReq = new ethers.FetchRequest(CFG.rpc);
+    fetchReq.getUrlFunc = ethers.FetchRequest.createGetUrlFunc({ agent });
+    provider = new ethers.JsonRpcProvider(fetchReq);
+  }
+  // Catch ethers internal provider errors (500/504) so they don't crash the process
+  provider.on('error', (err) => {
+    const msg = err?.message || String(err);
+    console.log(`\x1b[90m[${new Date().toLocaleTimeString('en-US', { hour12: false })}]\x1b[0m \x1b[33m?\x1b[0m \x1b[2m[provider.error]\x1b[0m ${msg.split('\n')[0]}`);
+  });
+  return provider;
 }
 
 // ================= API =================
 class ApiClient {
   constructor(wallet, proxy) {
-    this.w          = wallet;
-    this._sessionid = '';   // stored separately — never clobbered by regex
-    this._csrftoken = '';
-    this.csrf       = '';   // alias used by _headers()
+    this.w = wallet;
+    this.cookies = '';
+    this.csrf = '';
     const agent = createProxyAgent(proxy);
     this.http = axios.create({
       baseURL: CFG.api,
       timeout: 30000,
-      httpAgent:  agent,
+      httpAgent: agent,
       httpsAgent: agent,
       validateStatus: () => true,
     });
   }
-
-  // -- Cookie storage: parse Set-Cookie, keep sessionid & csrftoken separately
   _saveCookies(res) {
     const set = res.headers['set-cookie'];
     if (!set) return;
-    for (const raw of set) {
-      const pair  = raw.split(';')[0];          // "name=value"
-      const eqIdx = pair.indexOf('=');
-      if (eqIdx === -1) continue;
-      const name  = pair.slice(0, eqIdx).trim();
-      const value = pair.slice(eqIdx + 1).trim();
-      if (name === 'csrftoken') { this._csrftoken = value; this.csrf = value; }
-      if (name === 'sessionid') { this._sessionid = value; }
+    for (const c of set) {
+      const [pair] = c.split(';');
+      const [name] = pair.split('=');
+      const regex = new RegExp(`${name}=[^;]*`);
+      this.cookies = regex.test(this.cookies)
+        ? this.cookies.replace(regex, pair)
+        : (this.cookies ? this.cookies + '; ' : '') + pair;
     }
   }
-
-  // -- Cookie header always rebuilt from stored values (no string mutation)
-  get cookies() {
-    const parts = [];
-    if (this._csrftoken) parts.push(`csrftoken=${this._csrftoken}`);
-    if (this._sessionid) parts.push(`sessionid=${this._sessionid}`);
-    return parts.join('; ');
+  async _getCsrf() {
+    const r = await this.http.get('/csrf/', {
+      headers: { Cookie: this.cookies }
+    });
+    this._saveCookies(r);
+    const match = this.cookies.match(/csrftoken=([^;]+)/);
+    if (match) this.csrf = match[1];
   }
-
-  // -- Request headers
   _headers(post = false) {
-    const h = { Cookie: this.cookies, Accept: 'application/json' };
+    const h = {
+      Cookie: this.cookies,
+      Accept: 'application/json',
+    };
     if (post) {
       h['Content-Type'] = 'application/json';
-      h['X-CSRFToken']  = this.csrf;
-      h['Origin']       = CFG.api;
+      h['X-CSRFToken'] = this.csrf;
+      h['Origin'] = CFG.api;
     }
     return h;
   }
-
-  // -- CSRF bootstrap — retries up to 5x (server intermittently returns 500)
-  async _getCsrf() {
-    const RETRIES = 5;
-    for (let attempt = 1; attempt <= RETRIES; attempt++) {
-      const r = await this.http.get('/csrf/', {
-        headers: { Cookie: this.cookies, Accept: 'application/json' }
-      });
-      if (r.status === 200) {
-        this._saveCookies(r);
-        if (this._csrftoken) return;
-      }
-      if (attempt < RETRIES) {
-        const wait = 3000 * attempt;
-        console.log(
-          `${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[csrf ${attempt}/${RETRIES}]${C.reset}` +
-          ` HTTP ${r.status} — retry in ${wait / 1000}s...`
-        );
-        await sleep(wait);
-      }
-    }
-    throw new ServerError(`CSRF unavailable after ${RETRIES} attempts`);
-  }
-
-  // -- Auth — retries up to 5x, verifies sessionid is actually set
   async init() {
-    const RETRIES  = 5;
-    const DELAY_MS = 5000;
-
-    for (let attempt = 1; attempt <= RETRIES; attempt++) {
-      // Fresh CSRF token each attempt
-      try {
-        await this._getCsrf();
-      } catch (e) {
-        if (attempt < RETRIES) {
-          console.log(
-            `${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[auth/csrf ${attempt}/${RETRIES}]${C.reset}` +
-            ` ${e.message} — retry in ${DELAY_MS / 1000}s...`
-          );
-          await sleep(DELAY_MS);
-          continue;
-        }
-        throw e;
-      }
-
-      const r = await this.http.post(
-        '/api/auth/wallet/',
-        { wallet_address: this.w.address.toLowerCase() },
-        { headers: this._headers(true) }
-      );
-      this._saveCookies(r);   // captures sessionid if server sets it
-
-      if (r.status === 200) {
-        if (!this._sessionid) {
-          // Server said 200 but didn't set sessionid — retry
-          if (attempt < RETRIES) {
-            console.log(
-              `${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
-              ` Auth 200 but no sessionid — retry in ${DELAY_MS / 1000}s...`
-            );
-            this._csrftoken = '';   // force fresh CSRF next round
-            await sleep(DELAY_MS);
-            continue;
-          }
-          throw new ServerError('Auth 200 but server did not set sessionid cookie');
-        }
-        // sessionid is safe in this._sessionid — refresh CSRF won't touch it
-        await this._getCsrf();
-        return r.data;
-      }
-
-      // 5xx / 429 — retry
-      if ([429, 500, 502, 503, 504].includes(r.status)) {
-        if (attempt < RETRIES) {
-          const wait = DELAY_MS * attempt;
-          console.log(
-            `${ts()} ${C.yellow}⚠${C.reset} ${C.gray}[auth ${attempt}/${RETRIES}]${C.reset}` +
-            ` HTTP ${r.status} — retry in ${wait / 1000}s...`
-          );
-          await sleep(wait);
-          continue;
-        }
-        throw new ServerError(`Auth HTTP ${r.status} after ${RETRIES} attempts`);
-      }
-
-      // 4xx — not worth retrying
-      throw new Error(`Auth failed: HTTP ${r.status}`);
-    }
+    await this._getCsrf();
+    const r = await this.http.post(
+      '/api/auth/wallet/',
+      { wallet_address: this.w.address.toLowerCase() },
+      { headers: this._headers(true) }
+    );
+    this._saveCookies(r);
+    await this._getCsrf();
+    if (r.status !== 200) throw new Error(JSON.stringify(r.data));
+    return r.data;
   }
-
-  // -- Generic GET / POST
   async get(path) {
     const r = await withRetry(
       () => this.http.get(path, { headers: this._headers() }),
@@ -359,15 +286,14 @@ class ApiClient {
     this._saveCookies(r);
     return r.data;
   }
-
-  // -- Endpoint shortcuts
-  faucetClaim()         { return this.post('/api/inception/faucet/'); }
-  crateOpen()           { return this.post('/api/inception/crate/open/', { crate_name: 'daily' }); }
-  sync(tx)              { return this.post('/api/inception/sync/', { tx_hash: tx || '0x' }); }
-  profile()             { return this.get('/api/inception/profile/'); }
-  confirmBurn(tx)       { return this.post('/api/inception/exchange/confirm-burn/', { tx_hash: tx }); }
-  badgeList()           { return this.get('/api/inception/badge/'); }
-  mintBadgeApi(badgeId) { return this.post('/api/inception/badge/mint/', { badge_id: badgeId }); }
+  faucetClaim()        { return this.post('/api/inception/faucet/'); }
+  crateOpen()          { return this.post('/api/inception/crate/open/', { crate_name: 'daily' }); }
+  quantumCrateOpen()   { return this.post('/api/inception/crate/open/', { crate_name: 'quantum' }); }
+  sync(tx)             { return this.post('/api/inception/sync/', { tx_hash: tx || '0x' }); }
+  profile()            { return this.get('/api/inception/profile/'); }
+  confirmBurn(tx)      { return this.post('/api/inception/exchange/confirm-burn/', { tx_hash: tx }); }
+  badgeList()          { return this.get('/api/inception/badge/'); }
+  mintBadgeApi(badgeId){ return this.post('/api/inception/badge/mint/', { badge_id: badgeId }); }
 }
 
 // ================= ADDRESS =================
@@ -388,17 +314,8 @@ function pickRecipient(list, self) {
 }
 
 // ================= TX =================
-async function sendTxs(signer, api, addr, stats, daily) {
+async function sendTxs(signer, api, addr, stats) {
   const provider = signer.provider;
-
-  // Check remaining TX quota for today
-  const remaining = CFG.txMax - daily.txCount;
-  if (remaining <= 0) {
-    log(addr, `TX limit reached (${CFG.txMax}/day) — skip TX`, 'skip');
-    stats.txSent  = 0;
-    stats.txTotal = CFG.txMax;
-    return;
-  }
 
   let bal;
   try {
@@ -412,30 +329,29 @@ async function sendTxs(signer, api, addr, stats, daily) {
     return;
   }
 
-  const balEth = parseFloat(ethers.formatEther(bal)).toFixed(4);
-  log(addr, `Balance: ${C.bold}${balEth} ETH${C.reset}`, 'info');
+  const balDac = parseFloat(ethers.formatEther(bal)).toFixed(4);
+  log(addr, `Balance: ${C.bold}${balDac} DAC${C.reset}`, 'info');
 
-  if (bal < ethers.parseEther('0.001')) {
-    log(addr, `Balance too low (${balEth} ETH) — skip TX`, 'skip');
+  if (bal < ethers.parseEther('0.41')) {
+    log(addr, `Balance too low (${balDac} DAC) — skip TX`, 'skip');
     return;
   }
 
   const targets = loadAddresses();
-  const txCount = remaining;
-  log(addr, `Sending ${C.bold}${txCount} TX${C.reset} (${daily.txCount}/${CFG.txMax} used today)...`, 'send');
+  const txCount = 5;
+  log(addr, `Sending ${C.bold}${txCount} TX${C.reset}...`, 'send');
 
   let sent = 0;
   for (let i = 0; i < txCount; i++) {
     try {
       const to  = pickRecipient(targets, addr);
-      const amt = ethers.parseEther((0.0001 + Math.random() * 0.0002).toFixed(6));
+      const amt = ethers.parseEther((0.3 + Math.random() * 0.52).toFixed(6));
       const tx  = await withRetry(
         () => signer.sendTransaction({ to, value: amt }),
         { label: `TX ${i+1}` }
       );
       sent++;
-      daily.txCount++;
-      log(addr, `TX ${i+1}/${txCount} ${C.green}✔${C.reset} → ${to.slice(0,8)}... | hash: ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
+      log(addr, `TX ${i+1}/${txCount} ${C.green}?${C.reset} ? ${to.slice(0,8)}... | hash: ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
       await api.sync(tx.hash).catch(() => {});
       await sleep(2000 + Math.random() * 3000);
     } catch (e) {
@@ -449,64 +365,7 @@ async function sendTxs(signer, api, addr, stats, daily) {
   }
 
   stats.txSent  = sent;
-  stats.txTotal = CFG.txMax;
-}
-
-// ================= FAUCET =================
-async function claimFaucet(api, addr, stats, daily) {
-  if (daily.faucetCount >= CFG.faucetMax) {
-    log(addr, `Faucet already claimed today (${daily.faucetCount}/${CFG.faucetMax}) — skip`, 'skip');
-    stats.faucet = 'already claimed';
-    return;
-  }
-  try {
-    const f   = await api.faucetClaim();
-    const msg = f?.message || f?.status || JSON.stringify(f);
-    daily.faucetCount++;
-    log(addr, `Faucet (${daily.faucetCount}/${CFG.faucetMax}): ${msg}`, 'ok');
-    stats.faucet = msg;
-  } catch (e) {
-    if (isServerError(e)) {
-      log(addr, `Faucet server error — skip: ${e.message}`, 'skip');
-    } else {
-      log(addr, `Faucet error: ${e.message}`, 'warn');
-    }
-    stats.faucet = 'error';
-  }
-  await sleep(2000);
-}
-
-// ================= CRATE =================
-async function openCrates(api, addr, stats, daily) {
-  const remaining = CFG.crateMax - daily.crateCount;
-  if (remaining <= 0) {
-    log(addr, `Crate limit reached (${CFG.crateMax}/day) — skip`, 'skip');
-    stats.crate = `${daily.crateCount}/${CFG.crateMax} (done)`;
-    return;
-  }
-
-  log(addr, `Opening ${C.bold}${remaining} crate(s)${C.reset} (${daily.crateCount}/${CFG.crateMax} used today)...`, 'info');
-  let opened = 0;
-
-  for (let i = 0; i < remaining; i++) {
-    try {
-      const r   = await api.crateOpen();
-      const msg = r?.message || r?.reward || r?.status || JSON.stringify(r);
-      opened++;
-      daily.crateCount++;
-      log(addr, `Crate ${daily.crateCount}/${CFG.crateMax}: ${msg}`, 'ok');
-    } catch (e) {
-      if (isServerError(e)) {
-        log(addr, `Crate server error — stop: ${e.message}`, 'skip');
-        break;
-      }
-      log(addr, `Crate error: ${e.message}`, 'warn');
-      break;
-    }
-    await sleep(1500 + Math.random() * 1500);
-  }
-
-  stats.crate = `${opened} opened (${daily.crateCount}/${CFG.crateMax} today)`;
+  stats.txTotal = txCount;
 }
 
 // ================= BADGE =================
@@ -552,17 +411,19 @@ async function mintBadges(signer, api, addr, stats) {
     const badgeId   = badge.id   ?? badge.badge_id ?? badge.token_id;
     const badgeName = badge.name ?? badge.title    ?? String(badgeId);
 
+    // 1. API mint
     try {
       const r = await api.mintBadgeApi(badgeId);
       log(addr, `Badge API mint [${C.bold}${badgeName}${C.reset}]: ${JSON.stringify(r)}`, 'ok');
     } catch (e) {
       if (isServerError(e)) {
         log(addr, `Badge server error — skip badge [${badgeName}]: ${e.message}`, 'skip');
-        continue;
+        continue; // skip this badge entirely
       }
       log(addr, `Badge API mint [${badgeName}] error: ${e.message}`, 'warn');
     }
 
+    // 2. on-chain mint
     const contract = new ethers.Contract(CFG.badgeContract, CFG.badgeAbi, signer);
     const tokenId  = BigInt(badgeId ?? 0);
     let onChainOk  = false;
@@ -575,23 +436,88 @@ async function mintBadges(signer, api, addr, stats) {
           { label: `badge.${fn}(${badgeName})` }
         );
         await withRetry(() => tx.wait(), { label: `badge.${fn}.wait` });
-        log(addr, `Badge on-chain ${fn}() [${C.bold}${badgeName}${C.reset}] ✔ — ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
+        log(addr, `Badge on-chain ${fn}() [${C.bold}${badgeName}${C.reset}] ? — ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
         onChainOk = true;
         minted++;
       } catch (e) {
         if (isServerError(e)) {
           log(addr, `Badge on-chain server error — skip badge [${badgeName}]: ${e.message}`, 'skip');
-          break;
+          break; // skip remaining fn attempts for this badge
         }
+        // try next function (mint ? claim)
       }
     }
     if (!onChainOk) {
       log(addr, `Badge on-chain [${badgeName}] skipped`, 'skip');
     }
+
     await sleep(2000);
   }
 
   stats.badges = `${minted}/${claimable.length} minted`;
+}
+
+// ================= QUANTUM CRATE =================
+async function openQuantumCrates(api, addr, stats) {
+  const limit = CFG.qcrateMax; // 5 per day (enforced server-side)
+  log(addr, `Opening up to ${C.bold}${limit} Quantum Crate(s)${C.reset} (costs 150 QE each)...`, 'info');
+
+  let opened = 0;
+  let totalQe = 0;
+
+  for (let i = 0; i < limit; i++) {
+    try {
+      const r = await api.quantumCrateOpen();
+
+      // Server-side daily limit reached
+      if (r?.error) {
+        const errMsg = r.error;
+        if (/limit|already|cooldown|insufficient|not enough/i.test(errMsg)) {
+          log(addr, `Quantum Crate: ${C.yellow}${errMsg}${C.reset}`, 'skip');
+          break;
+        }
+        log(addr, `Quantum Crate error: ${C.red}${errMsg}${C.reset} (code: ${r?.code ?? 'none'})`, 'warn');
+        break;
+      }
+
+      if (r?.success) {
+        opened++;
+        const reward   = r.reward?.label  ?? `${r.reward?.amount ?? '?'} QE`;
+        const opensSvr = r.opens_today    ?? opened;
+        const limitSvr = r.daily_open_limit ?? limit;
+        const qeTotal  = r.new_total_qe   ?? '-';
+        totalQe       += r.reward?.amount ?? 0;
+
+        log(addr,
+          `Quantum Crate ${opensSvr}/${limitSvr} ? — reward: ${C.green}${C.bold}${reward}${C.reset} | QE total: ${C.cyan}${qeTotal}${C.reset}`,
+          'ok'
+        );
+
+        // Stop if server says we've hit the daily limit
+        if (opensSvr >= limitSvr) {
+          log(addr, `Quantum Crate: daily limit reached (${opensSvr}/${limitSvr})`, 'skip');
+          break;
+        }
+      } else {
+        log(addr, `Quantum Crate unexpected response: ${JSON.stringify(r)}`, 'warn');
+        break;
+      }
+
+    } catch (e) {
+      if (isServerError(e)) {
+        log(addr, `Quantum Crate server error — stop: ${e.message}`, 'skip');
+        break;
+      }
+      log(addr, `Quantum Crate error: ${e.message}`, 'warn');
+      break;
+    }
+
+    await sleep(1500 + Math.random() * 1500);
+  }
+
+  stats.qcrate = opened > 0
+    ? `${opened}/${limit} opened (+${totalQe} QE)`
+    : 'none opened';
 }
 
 // ================= BURN =================
@@ -619,7 +545,7 @@ async function burnForQE(signer, api, addr, stats) {
 }
 
 // ================= WALLET =================
-async function runWallet(pk, proxy, index, total, state) {
+async function runWallet(pk, proxy, index, total) {
   const wallet   = new ethers.Wallet(pk);
   const evm      = accounts.valid(pk);
   const addr     = wallet.address;
@@ -627,29 +553,10 @@ async function runWallet(pk, proxy, index, total, state) {
   const signer   = wallet.connect(provider);
   const api      = new ApiClient(wallet, proxy);
 
-  // Load / reset daily state for this wallet
-  const daily = getDailyState(state, addr);
-
-  // Check if all daily tasks are already completed
-  const allDone =
-    daily.faucetCount >= CFG.faucetMax &&
-    daily.crateCount  >= CFG.crateMax  &&
-    daily.txCount     >= CFG.txMax;
-
-  if (allDone) {
-    const resetIn = Math.ceil((daily.windowStart + CFG.windowMs - Date.now()) / 60000);
-    log(addr, `All daily tasks done — next reset in ${resetIn} min`, 'skip');
-    return;
-  }
-
-  const stats = { txSent: 0, txTotal: CFG.txMax, faucet: '', crate: '', burn: '', qe: null, badges: '0' };
+  const stats = { txSent: 0, txTotal: 5, faucet: '', qcrate: '', burn: '', qe: null, badges: '0' };
 
   divider('-');
   log(addr, `Wallet ${C.bold}${index}/${total}${C.reset} | ${proxy ? `proxy ${C.dim}${proxy.slice(0,20)}...${C.reset}` : 'direct'}`, 'start');
-  log(addr,
-    `Daily progress — Faucet: ${daily.faucetCount}/${CFG.faucetMax} | Crate: ${daily.crateCount}/${CFG.crateMax} | TX: ${daily.txCount}/${CFG.txMax}`,
-    'info'
-  );
 
   // Auth
   try {
@@ -664,22 +571,62 @@ async function runWallet(pk, proxy, index, total, state) {
     return;
   }
 
-  // 1. Faucet (1x/day)
-  await claimFaucet(api, addr, stats, daily);
+  // 1. Faucet
+  try {
+    const f = await api.faucetClaim();
 
-  // 2. Crate (5x/day)
-  await openCrates(api, addr, stats, daily);
+    // Handle: account not linked to X / Discord
+    if (f?.code === 'social_required') {
+      log(addr, `Faucet skipped — ${C.yellow}${f.error}${C.reset}`, 'warn');
+      log(addr, `${C.dim}?? Link your X or Discord at https://inception.dachain.io to activate faucet.${C.reset}`, 'warn');
+      stats.faucet = 'social_required';
 
-  // 3. Send TX (15x/day)
-  await sendTxs(signer, api, addr, stats, daily);
+    // Handle: already claimed
+    } else if (
+      f?.code === 'already_claimed' ||
+      (typeof f?.error === 'string' && /already/i.test(f.error)) ||
+      (typeof f?.message === 'string' && /already/i.test(f.message))
+    ) {
+      const msg = f?.error || f?.message || 'already claimed';
+      log(addr, `Faucet: ${C.yellow}${msg}${C.reset}`, 'skip');
+      stats.faucet = 'already claimed';
 
-  // 4. Burn DACC for QE
+    // Handle: other API-level error
+    } else if (f?.error) {
+      log(addr, `Faucet error — ${C.red}${f.error}${C.reset} (code: ${f?.code ?? 'none'})`, 'warn');
+      stats.faucet = `error: ${f.error}`;
+
+    // Success
+    } else {
+      const msg = f?.message || f?.status || JSON.stringify(f);
+      log(addr, `Faucet: ${C.green}${msg}${C.reset}`, 'ok');
+      stats.faucet = msg;
+    }
+
+  } catch (e) {
+    if (isServerError(e)) {
+      log(addr, `Faucet server error — skip: ${e.message}`, 'skip');
+    } else {
+      log(addr, `Faucet error: ${e.message}`, 'warn');
+    }
+    stats.faucet = 'error';
+  }
+  await sleep(2000);
+
+  // 2. Quantum Crate (5x/day, costs 150 QE each)
+  await openQuantumCrates(api, addr, stats);
+  await sleep(2000);
+
+  // 3. Send 5 TX
+  await sendTxs(signer, api, addr, stats);
+
+  // 5. Burn DACC for QE
   await burnForQE(signer, api, addr, stats);
 
-  // 5. Mint badges
+  // 6. Mint badges
   await mintBadges(signer, api, addr, stats);
 
-  // 6. Profile / QE balance
+  // 7. Profile / QE balance
   try {
     const p = await api.profile();
     const qe = p?.qe_balance ?? p?.balance ?? '-';
@@ -701,15 +648,12 @@ function loadKeys() {
     .map(x => x.trim())
     .filter(x => x.startsWith('0x'));
 }
-
 async function runAll() {
   const keys    = loadKeys();
   const proxies = loadProxies();
-  const state   = loadState();  // load state at the start of each cycle
 
   console.log(`\n${C.bold}${C.cyan}${'-'.repeat(55)}${C.reset}`);
   console.log(`${C.bold}${C.cyan}  DAC Inception Bot — ${keys.length} wallet(s) loaded${C.reset}`);
-  console.log(`${C.bold}${C.cyan}  Faucet: ${CFG.faucetMax}x/day | Crate: ${CFG.crateMax}x/day | TX: ${CFG.txMax}x/day${C.reset}`);
   console.log(`${C.bold}${C.cyan}${'-'.repeat(55)}${C.reset}\n`);
 
   let done = 0, skipped = 0;
@@ -717,30 +661,32 @@ async function runAll() {
   for (let i = 0; i < keys.length; i++) {
     const proxy = proxies.length ? proxies[i % proxies.length] : null;
     try {
-      await runWallet(keys[i], proxy, i + 1, keys.length, state);
+      await runWallet(keys[i], proxy, i + 1, keys.length);
       done++;
     } catch (e) {
-      console.log(`${ts()} ${C.red}✖${C.reset} Wallet ${i+1} unexpected error — skip: ${e.message}`);
+      // Unexpected top-level error — skip this wallet
+      console.log(`${ts()} ${C.red}?${C.reset} Wallet ${i+1} unexpected error — skip: ${e.message}`);
       skipped++;
     }
-    saveState(state);  // save state after each wallet
     await sleep(3000 + Math.random() * 3000);
   }
 
   divider('-');
-  console.log(`${ts()} ${C.bold}${C.green}✔ Cycle done — ${done} OK, ${skipped} skipped${C.reset}`);
+  console.log(`${ts()} ${C.bold}${C.green}? Cycle done — ${done} OK, ${skipped} skipped${C.reset}`);
   divider('-');
   console.log();
 }
 
-// ================= LOOP =================
+// LOOP
 (async () => {
   let cycle = 1;
   while (true) {
-    console.log(`${ts()} ${C.bold}${C.magenta}🚀 Starting cycle #${cycle}${C.reset}`);
+    console.log(`${ts()} ${C.bold}${C.magenta}?? Starting cycle #${cycle}${C.reset}`);
     await runAll();
     cycle++;
-    console.log(`${ts()} ${C.dim}Next cycle in ${CFG.loopMs / 60000} min...${C.reset}\n`);
-    await sleep(CFG.loopMs);
+    const nextHr = CFG.loopMinHr + Math.random() * (CFG.loopMaxHr - CFG.loopMinHr);
+    const nextMs = Math.floor(nextHr * 60 * 60 * 1000);
+    console.log(`${ts()} ${C.dim}Next cycle in ${nextHr.toFixed(2)} hours...${C.reset}\n`);
+    await sleep(nextMs);
   }
 })();
