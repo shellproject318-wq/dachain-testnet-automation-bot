@@ -35,16 +35,6 @@ const CFG = {
   qcrateMax:     5,   // max quantum crate opens per 24 hours (server limit: 5)
 };
 
-// ================= SUPPRESS ETHERS NOISE =================
-// ethers v6 prints "JsonRpcProvider failed to detect network" directly to console.log
-// every 1s when RPC is unreachable — intercept and silence it
-const _origConsoleLog = console.log;
-console.log = (...args) => {
-  const msg = args.map(a => (typeof a === 'string' ? a : '')).join(' ');
-  if (/JsonRpcProvider failed to detect network/i.test(msg)) return;
-  _origConsoleLog(...args);
-};
-
 // ================= GLOBAL ERROR GUARD =================
 // Prevents bot from crashing on 500/504 RPC errors thrown internally by ethers.js
 // These escape try/catch because they are emitted outside the awaited promise chain.
@@ -188,18 +178,6 @@ async function withRetry(fn, { retries = 5, label = '' } = {}) {
     }
   }
   throw new ServerError(`Server unreachable after ${retries} retries (${label}): ${lastErr?.message}`);
-}
-
-// ================= RPC HEALTH CHECK =================
-// Quick check before running any on-chain task.
-// Uses only 2 retries so we fail fast instead of wasting time.
-async function checkRpc(provider) {
-  try {
-    await withRetry(() => provider.getBlockNumber(), { retries: 2, label: 'RPC check' });
-    return true;
-  } catch (e) {
-    return false;
-  }
 }
 
 // ================= PROXY =================
@@ -639,24 +617,14 @@ async function runWallet(pk, proxy, index, total) {
   await openQuantumCrates(api, addr, stats);
   await sleep(2000);
 
-  // RPC health check — skip all on-chain tasks if RPC is unreachable
-  log(addr, 'Checking RPC...', 'info');
-  const rpcOk = await checkRpc(provider);
-  if (!rpcOk) {
-    log(addr, `${C.red}RPC unreachable${C.reset} — skipping TX, Burn, Badge`, 'warn');
-    stats.txSent  = 0;
-    stats.burn    = 'rpc down';
-    stats.badges  = 'rpc down';
-  }
-
   // 3. Send 5 TX
-  if (rpcOk) await sendTxs(signer, api, addr, stats);
+  await sendTxs(signer, api, addr, stats);
 
   // 5. Burn DACC for QE
-  if (rpcOk) await burnForQE(signer, api, addr, stats);
+  await burnForQE(signer, api, addr, stats);
 
   // 6. Mint badges
-  if (rpcOk) await mintBadges(signer, api, addr, stats);
+  await mintBadges(signer, api, addr, stats);
 
   // 7. Profile / QE balance
   try {
