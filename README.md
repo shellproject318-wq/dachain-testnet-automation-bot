@@ -8,12 +8,12 @@ An automated bot to perform daily on-chain activities on the **DAC Inception Tes
 
 | Feature | Description |
 |---------|-------------|
-| 💸 **Send TX** | Configurable TX count per wallet — amount auto-scales to balance |
+| 💸 **Send TX** | 3 TX per wallet per cycle — amount auto-scales to balance |
 | 🚰 **Faucet** | Auto-claim daily faucet — shows cooldown timer if already claimed |
 | 📦 **Quantum Crate** | Open up to 5 Quantum Crates per day (150 QE each) — shows reset timer |
 | 🔥 **Burn DACC** | Burn DACC to earn QE (configurable, max 0.1 DAC/cycle) |
-| 🏅 **Badge Mint** | Auto-mint rank badges on-chain via `claimRank(uint8, bytes)` + signature flow |
-| 📋 **Activity Tasks** | Sync 14 on-chain tasks + visit 5 pages per cycle |
+| 🏅 **Badge Mint** | Auto-mint rank badges on-chain — **auto-skipped if all already minted** |
+| ~~📋 **Activity Tasks**~~ | ~~Sync 14 on-chain tasks + visit 5 pages per cycle~~ — **disabled** |
 | 🔄 **Multi-Wallet** | Run multiple wallets sequentially from `pk.txt` |
 | 🌐 **Proxy Support** | Per-wallet proxy support for API + RPC (optional) |
 | ♻️ **Auto Loop** | Automatically re-runs every **11–12 hours** (randomized) |
@@ -104,13 +104,13 @@ nohup node bot.js &
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `txCount` | `5` | TX count per wallet per cycle |
+| `txCount` | `3` | TX count per wallet per cycle *(reduced from 5)* |
 | `txMaxAmt` | `0.05 DAC` | Max DAC per TX (auto-scaled to balance) |
 | `burnAmount` | `0.005 DAC` | DACC burned per cycle |
 | `loopMinHr` | `11` | Minimum hours between cycles |
 | `loopMaxHr` | `12` | Maximum hours between cycles |
 | `qcrateMax` | `5` | Max quantum crates per cycle |
-| `mintBadge` | `true` | Enable rank badge minting |
+| `mintBadge` | `true` | Enable rank badge minting (auto-skipped if all minted) |
 
 > To change defaults, edit the `CFG` object at the top of `bot.js`.
 
@@ -123,7 +123,7 @@ nohup node bot.js &
 | 429 rate-limit (1st hit) | `Retry-After` header or **1.5 s** |
 | 429 rate-limit (2nd hit) | Skip immediately |
 | 500/502/503/504 retry | **2 s × attempt** (up to 5 retries) |
-| Between TXs | Random **2–5 seconds** |
+| Between TXs | Random **1–2 seconds** *(reduced from 2–5 s)* |
 | After Faucet | **2 seconds** |
 | Between Quantum Crate opens | Random **1.5–3 seconds** |
 | Between badge mints | **1.5 seconds** |
@@ -133,26 +133,25 @@ nohup node bot.js &
 
 ---
 
-## 🔁 Execution Flow (per wallet)
+## 🔄 Execution Flow (per wallet)
 
 ```
 Auth (SIWE nonce+sign → fallback address-only)
     │
     ├─ 1. Faucet Claim          → shows "next in Xh Ym" if already claimed
     ├─ 2. Quantum Crate (≤5x)   → shows reset timer when limit reached
-    ├─ 3. Send TX × N           → amount auto-scaled to balance
+    ├─ 3. Send TX × 3           → amount auto-scaled to balance
     ├─ 4. Burn DACC → QE
     ├─ 5. Fetch Profile         → QE balance + faucet timer + badges[]
     │      │
-    │      └─ 6. Mint Rank Badges (unminted only)
+    │      └─ 6. Mint Rank Badges
+    │              ├─ AUTO-SKIP if all rank badges already minted on-chain
     │              ├─ POST /nft/claim-signature/  {rank_key}
     │              ├─ contract.claimRank(uint8, bytes)
     │              │       └─ on error: hasMinted() check
     │              └─ POST /nft/confirm-mint/     {rank_key, tx_hash}
     │
-    ├─ 7. Activity Tasks
-    │      ├─ POST /task/  × 14  (sync on-chain milestones)
-    │      └─ POST /visit/ × 5   (page visit rewards)
+    ├─ 7. Activity Tasks        → DISABLED
     │
     └─ 8. Print Summary
 ```
@@ -165,6 +164,7 @@ Rank badges are the only badges minted on-chain. Detection:
 
 - Source: `profile.badges[]` (from `GET /api/inception/profile/`)
 - Mintable: `badge__key.startsWith('rank_')` **AND** `nft_tx_hash === ""`
+- **Auto-skip**: if `mintable.length === 0`, the entire mint step is skipped — no RPC calls made
 
 | Rank | QE Reward | Requirement |
 |------|-----------|-------------|
@@ -206,8 +206,8 @@ Rank badges are the only badges minted on-chain. Detection:
 
 ```
 ===============================================================
-  DAC Inception Bot — v2.3
-  TX: 5 | Max amt: 0.05 DAC | Burn: 0.005 DAC | Badge: ON
+  DAC Inception Bot — v2.3 (optimized)
+  TX: 3 | Max amt: 0.05 DAC | Burn: 0.005 DAC | Badge: ON
 ===============================================================
 
 [10:30:00] 🚀 Starting cycle #1
@@ -219,26 +219,21 @@ Rank badges are the only badges minted on-chain. Detection:
 [10:30:05] ✓ [0x000..eF39] Quantum Crate 4/5 ✓ — reward: 500 QE | QE total: 12662
 [10:30:06] ⏭ [0x000..eF39] Quantum Crate: daily limit reached — resets in 20h 14m
 [10:30:07] ℹ [0x000..eF39] Balance: 30.3587 DAC
-[10:30:07] → [0x000..eF39] Sending 5 TX...
-[10:30:15] ✓ [0x000..eF39] TX 5/5 ✓ → 0x9be7a4b8... | hash: 0x927c9272cd87...
-[10:30:20] ✓ [0x000..eF39] Burn success — 0xf5d59c59...
-[10:30:21] ✓ [0x000..eF39] QE Balance: 12712
-[10:30:21] 🏅 [0x000..eF39] Badges: 54 earned | 1 rank unminted | 8 rank minted
-[10:30:21] 🏅 [0x000..eF39] Minting [Architect] +3000 QE (rank_architect)
-[10:30:22] ℹ [0x000..eF39]   Got signature for [Architect] rank_id=8
-[10:30:22] ℹ [0x000..eF39]   Estimating gas for claimRank(8)...
-[10:30:23] ℹ [0x000..eF389   On-chain claimRank(8, sig) [Architect]...
-[10:30:28] ✓ [0x000..eF38]   [Architect] minted — 0xabc123...
-[10:30:30] ✓ [0x000..eF38] Activities: 8 synced | 5 visited
+[10:30:07] → [0x000..eF39] Sending 3 TX...
+[10:30:13] ✓ [0x000..eF39] TX 3/3 ✓ → 0x9be7a4b8... | hash: 0x927c9272cd87...
+[10:30:18] ✓ [0x000..eF39] Burn success — 0xf5d59c59...
+[10:30:19] ✓ [0x000..eF39] QE Balance: 12712
+[10:30:19] 🏅 [0x000..eF39] All rank badges already minted (9 on-chain) — skipping badge mint
+[10:30:19] ⏭ [0x000..eF39] Activity Tasks — disabled
 -------------------------------------------------------
-[10:30:30] 📊 SUMMARY [0xD767..eF38]
-   ✓ TX Sent       : 5/5
+[10:30:19] 📊 SUMMARY [0xD767..eF38]
+   ✓ TX Sent       : 3/3
    ⏭ Faucet        : already claimed — next in 18h 32m
    ✓ Quantum Crate : 5/5 opened (+750 QE)
    ✓ Burn          : success
-   🏅 Badges        : 1/1 minted | 8 already done
+   🏅 Badges        : 9 already minted (auto-skipped)
    ℹ QE Balance    : 15712
-   ℹ Tasks         : 8 tasks synced, 5 pages visited
+   ⏭ Tasks         : disabled
 -------------------------------------------------------
 [10:xx:xx] ✓ Cycle done — 50 OK, 0 skipped
 [10:xx:xx] Next cycle in 11.43 hours...
@@ -246,11 +241,25 @@ Rank badges are the only badges minted on-chain. Detection:
 
 ---
 
+## 🔧 Optimization Notes
+
+The following changes have been applied to reduce per-wallet execution time:
+
+| Change | Before | After | Time Saved |
+|--------|--------|-------|------------|
+| TX count | `5` | `3` | ~33 s |
+| Sleep between TXs | `2–5 s` | `1–2 s` | ~6 s |
+| Activity Tasks | Enabled | **Disabled** | ~14 s |
+| Badge Mint | Always runs | **Auto-skipped if all minted** | ~60–100 s |
+| **Total saved** | | | **~113–153 s/wallet** |
+
+---
+
 ## 📁 Project Structure
 
 ```
 dachain-bot/
-├── bot.js           ← main script (non-interactive, v2.3)
+├── bot.js           ← main script (non-interactive, v2.3 optimized)
 ├── pk.txt           ← wallet private keys (required)
 ├── address.txt      ← TX target addresses (optional)
 ├── proxy.txt        ← proxy list (optional)
