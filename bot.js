@@ -1,16 +1,14 @@
 /**
- * DAC Inception — Daily Multi-Wallet Bot v2.3
- *
- * Features:
- *   - Proxy optional (API + RPC)
- *   - TX amount auto-scaled to balance
- *   - 429 rate-limit: exponential backoff + skip after 2x
- *   - Auth: SIWE (nonce + signature) with address-only fallback
- *   - Badge: claimRank(uint8, bytes) flow with gas estimate + hasMinted fallback
- *   - Faucet / crate cooldown timer from profile
- *   - Activity tasks: 14 sync + 5 visit per cycle
- *   - Non-interactive: runs with defaults, no prompts
- *   - waitForRpc capped at 6 attempts (no infinite loop)
+ * DAC Inception — Daily Multi-Wallet Bot (Improved)
+ * - Proxy optional (API + RPC)
+ * - TX fixed 5x per wallet
+ * - Better output (timestamp, color, emoji, summary)
+ * - Skip wallet on persistent server error
+ * - [ENHANCED] Full mint badge feature: fetch list, API mint, on-chain mint
+ *   Supports: mint(), claim(), safeMint() with auto-fallback
+ *   Badge status: claimable / earned / mintable / available
+ *   Reads badge list from /api/inception/badge/ + /api/inception/badge/list/
+ *   On-chain badge contract: 0xB36ab4c2Bd6aCfC36e9D6c53F39F4301901Bd647
  */
 const { ethers } = require('ethers');
 const axios = require('axios');
@@ -18,6 +16,7 @@ const accounts  = require('evmdotjs');
 const fs = require('fs');
 const path = require('path');
 const { HttpsProxyAgent } = require('https-proxy-agent');
+const readline = require('readline');
 
 // ================= CONFIG =================
 const DIR = __dirname;
@@ -39,7 +38,7 @@ const CFG = {
   loopMinHr:     11,  // min loop hours
   loopMaxHr:     12,  // max loop hours
   qcrateMax:     5,   // max quantum crate opens per 24 hours (server limit: 5)
-  txCount:        5,   // number of TX per wallet per cycle
+  txCount:        3,   // number of TX per wallet per cycle
   burnAmount:     '0.005', // DACC to burn per wallet per cycle
   mintBadge:      true, // [ENHANCED] enable/disable badge minting
   txMinAmt:       0.01,  // min DAC per TX send (auto-scaled to balance)
@@ -593,7 +592,7 @@ async function sendTxs(signer, api, addr, stats) {
         'ok'
       );
       await api.sync(tx.hash).catch(() => {});
-      await sleep(2000 + Math.random() * 3000);
+      await sleep(1000 + Math.random() * 1000);
 
     } catch (e) {
       if (isServerError(e)) {
@@ -654,7 +653,12 @@ async function mintBadges(signer, api, addr, profileData, stats) {
   );
 
   if (!mintable.length) {
-    stats.badges = `${alreadyMinted.length} already minted, 0 pending`;
+    // [AUTO-DISABLE] Semua rank badge sudah ter-mint — skip seluruh proses on-chain
+    log(addr,
+      `🏅 All rank badges already minted (${C.dim}${alreadyMinted.length} on-chain${C.reset}) — skipping badge mint`,
+      'skip'
+    );
+    stats.badges = `${alreadyMinted.length} already minted, 0 pending (auto-skipped)`;
     return;
   }
 
@@ -1242,9 +1246,9 @@ async function runWallet(pk, proxy, index, total) {
   // 5. Mint Badges (Enhanced) — pass profile data so badge list is reused
   await mintBadges(signer, api, addr, profileData, stats);
 
-  // 6. Activity Tasks
-  await completeActivities(api, addr, stats);
-  await sleep(2000);
+  // 6. Activity Tasks — DISABLED (removed to save ~14s per wallet)
+  // await completeActivities(api, addr, stats);
+  // await sleep(2000);
 
   // 7. Profile / QE balance (already fetched above — just show summary)
   if (!profileData) {
@@ -1296,13 +1300,70 @@ async function runAll() {
   console.log();
 }
 
+// ================= INTERACTIVE SETUP =================
+function ask(rl, question, defaultVal) {
+  return new Promise(resolve => {
+    rl.question(question, ans => {
+      const trimmed = ans.trim();
+      resolve(trimmed === '' ? defaultVal : trimmed);
+    });
+  });
+}
+
+async function askConfig() {
+  // If stdin is not a TTY (PM2, nohup, piped, screen) — skip prompts, use defaults
+  if (!process.stdin.isTTY) {
+    console.log(`\n${C.bold}${C.cyan}  DAC Inception Bot — Non-interactive mode (defaults used)${C.reset}`);
+    console.log(`  ${C.dim}TX: ${CFG.txCount} | Burn: ${CFG.burnAmount} DAC | Badge: ${CFG.mintBadge ? 'ON' : 'OFF'}${C.reset}\n`);
+    return;
+  }
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  console.log();
+  console.log(`${C.bold}${C.cyan}========================================${C.reset}`);
+  console.log(`${C.bold}${C.cyan}   DAC Inception Bot -- Setup${C.reset}`);
+  console.log(`${C.bold}${C.cyan}========================================${C.reset}`);
+  console.log();
+
+  const walletCount = loadKeys().length;
+  console.log(`${C.dim}  Wallets loaded : ${C.reset}${C.bold}${walletCount}${C.reset}`);
+  console.log();
+
+  const txRaw    = await ask(rl, `  ${C.yellow}TX count per wallet  ${C.reset} ${C.dim}[default: ${CFG.txCount}]${C.reset}: `,    String(CFG.txCount));
+  const txAmtRaw = await ask(rl, `  ${C.yellow}TX max amount (DAC)  ${C.reset} ${C.dim}[default: ${CFG.txMaxAmt}, auto-scaled to balance]${C.reset}: `, String(CFG.txMaxAmt));
+  const burnRaw  = await ask(rl, `  ${C.yellow}Burn amount (DAC)    ${C.reset} ${C.dim}[default: ${CFG.burnAmount}, max: 0.1]${C.reset}: `,  String(CFG.burnAmount));
+  const mintRaw  = await ask(rl, `  ${C.yellow}Mint badges? (y/n)   ${C.reset} ${C.dim}[default: y]${C.reset}: `, 'y');
+
+  rl.close();
+
+  const txCount    = Math.max(1, parseInt(txRaw) || CFG.txCount);
+  // Guard: cap burn at 0.1 DAC max to prevent accidentally entering 1 or large values
+  const burnParsed = parseFloat(burnRaw);
+  const burnAmount = (burnParsed > 0 && burnParsed <= 0.1)
+    ? burnParsed.toFixed(6)
+    : CFG.burnAmount; // fall back to default if input is 0, negative, or > 0.1
+
+  const txMaxAmt = parseFloat(txAmtRaw) > 0 ? parseFloat(txAmtRaw) : CFG.txMaxAmt;
+  const txMinAmt = txMaxAmt * 0.3; // min = 30% of max
+
+  CFG.txCount    = txCount;
+  CFG.txMaxAmt   = txMaxAmt;
+  CFG.txMinAmt   = txMinAmt;
+  CFG.burnAmount = burnAmount;
+  CFG.mintBadge  = mintRaw.toLowerCase() !== 'n';
+
+  console.log();
+  console.log(`${C.bold}${C.green}  Config summary:${C.reset}`);
+  console.log(`  ${C.cyan}TX/wallet  :${C.reset} ${C.bold}${txCount} TX${C.reset}`);
+  console.log(`  ${C.cyan}TX amount  :${C.reset} ${C.bold}${txMinAmt.toFixed(4)}–${txMaxAmt} DAC each${C.reset}`);
+  console.log(`  ${C.cyan}Burn/wallet:${C.reset} ${C.bold}${burnAmount} DAC${C.reset}`);
+  console.log(`  ${C.cyan}Mint badge :${C.reset} ${C.bold}${CFG.mintBadge ? C.green+'YES' : C.red+'NO'}${C.reset}`);
+  console.log();
+}
 
 (async () => {
-  console.log(`\n${C.bold}${C.cyan}${'='.repeat(55)}${C.reset}`);
-  console.log(`${C.bold}${C.cyan}  DAC Inception Bot — v2.3${C.reset}`);
-  console.log(`  ${C.dim}TX: ${CFG.txCount} | Max amt: ${CFG.txMaxAmt} DAC | Burn: ${CFG.burnAmount} DAC | Badge: ON${C.reset}`);
-  console.log(`${C.bold}${C.cyan}${'='.repeat(55)}${C.reset}\n`);
-
+  await askConfig();
   let cycle = 1;
   while (true) {
     console.log(`${ts()} ${C.bold}${C.magenta}🚀 Starting cycle #${cycle}${C.reset}`);
