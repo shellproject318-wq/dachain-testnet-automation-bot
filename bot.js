@@ -1,5 +1,5 @@
 /**
- * DAC Inception — Daily Multi-Wallet Bot (Improved)
+ * DAC Inception � Daily Multi-Wallet Bot (Improved)
  * - Proxy optional (API + RPC)
  * - TX fixed 5x per wallet
  * - Better output (timestamp, color, emoji, summary)
@@ -75,8 +75,10 @@ process.on('uncaughtException', (err) => {
       ` \x1b[33m?\x1b[0m \x1b[2m[uncaughtException]\x1b[0m RPC error suppressed: ${msg.split('\n')[0]}`
     );
   } else {
-    console.error(`\x1b[31m? [uncaughtException]\x1b[0m`, msg);
-    process.exit(1);
+    console.log(
+      `\x1b[90m[${new Date().toLocaleTimeString('en-US', { hour12: false })}]\x1b[0m` +
+      ` \x1b[31m? [uncaughtException]\x1b[0m ${msg.split('\n')[0]}`
+    );
   }
 });
 
@@ -109,7 +111,7 @@ function log(addr, msg, level = 'info') {
     send:    `${C.magenta}?${C.reset}`,
     start:   `${C.cyan}?${C.reset}`,
     badge:   `${C.magenta}??${C.reset}`,
-  }[level] || '•';
+  }[level] || '�';
   console.log(`${ts()} ${prefix} ${short} ${msg}`);
 }
 
@@ -150,24 +152,36 @@ function isServerError(e) {
 class ServerError extends Error {
   constructor(msg) { super(msg); this.name = 'ServerError'; }
 }
-// 429 Too Many Requests — treated as a soft skip, not a crash
+// 429 Too Many Requests � treated as a soft skip, not a crash
 class RateLimitError extends Error {
   constructor(msg) { super(msg); this.name = 'RateLimitError'; }
 }
 
 /**
- * withRetry — wraps any async fn with retry + backoff logic.
+ * withRetry � wraps any async fn with retry + backoff logic.
  *
  * 429 handling (rate limit):
  *   - Reads Retry-After header if present
- *   - Exponential backoff: base429Wait × 2^(attempt-1), capped at 2 min
+ *   - Exponential backoff: base429Wait � 2^(attempt-1), capped at 2 min
  *   - After 2 consecutive 429s ? throws RateLimitError (caller skips cleanly)
  *
  * 5xx handling:
- *   - Linear backoff: 2s × attempt
+ *   - Linear backoff: 2s � attempt
  *   - After `retries` attempts ? throws ServerError
  */
-async function withRetry(fn, { retries = 5, label = '', base429Wait = 1500 } = {}) {
+async function withTimeout(promise, ms, label = 'operation') {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timeout: ${label} after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function withRetry(fn, { retries = 3, label = '', base429Wait = 1000 } = {}) {
   let lastErr;
   let consecutive429 = 0;
 
@@ -181,34 +195,31 @@ async function withRetry(fn, { retries = 5, label = '', base429Wait = 1500 } = {
         // ---- 429 Rate Limit ----
         if (status === 429) {
           consecutive429++;
-          // Give up after 2 consecutive 429s — no point hammering a throttled endpoint
           if (consecutive429 >= 2 || attempt === retries) {
             throw new RateLimitError(`Rate limited (429) on ${label}`);
           }
-          // Honour Retry-After header if server sends it
           const retryAfterRaw = result.headers?.['retry-after'];
           let wait;
           if (retryAfterRaw) {
             const secs = parseInt(retryAfterRaw, 10);
             wait = isNaN(secs) ? base429Wait : secs * 1000;
           } else {
-            // Exponential: 1.5s, 3s, 6s... capped at 4s
-            wait = Math.min(base429Wait * Math.pow(2, attempt - 1), 4000);
+            wait = Math.min(base429Wait * Math.pow(2, attempt - 1), 3000);
           }
-          console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[429 ${attempt}/${retries}]${C.reset} ${label} — rate limited, wait ${(wait/1000).toFixed(0)}s`);
+          console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[429 ${attempt}/${retries}]${C.reset} ${label}  rate limited, wait ${(wait/1000).toFixed(0)}s`);
           await sleep(wait);
           continue;
         }
 
-        consecutive429 = 0; // reset on non-429
+        consecutive429 = 0;
 
         // ---- 5xx Server Error ----
         if ([500, 502, 503, 504].includes(status)) {
           if (attempt === retries) {
             throw new ServerError(`HTTP ${status} after ${retries} attempts (${label})`);
           }
-          const wait = 2000 * attempt + Math.floor(Math.random() * 2000);
-          console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[retry ${attempt}/${retries}]${C.reset} ${label} HTTP ${status} — wait ${(wait/1000).toFixed(1)}s`);
+          const wait = 1500 * attempt + Math.floor(Math.random() * 1000);
+          console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[retry ${attempt}/${retries}]${C.reset} ${label} HTTP ${status}  wait ${(wait/1000).toFixed(1)}s`);
           await sleep(wait);
           continue;
         }
@@ -223,8 +234,8 @@ async function withRetry(fn, { retries = 5, label = '', base429Wait = 1500 } = {
         if (isServerError(e)) throw new ServerError(`${label} failed after ${retries} attempts: ${e.message}`);
         throw e;
       }
-      const wait = 2000 * attempt + Math.floor(Math.random() * 1000);
-      console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[retry ${attempt}/${retries}]${C.reset} ${label} — ${e.shortMessage || e.message?.split('\n')[0]} — wait ${(wait/1000).toFixed(1)}s`);
+      const wait = 1500 * attempt + Math.floor(Math.random() * 500);
+      console.log(`${ts()} ${C.yellow}?${C.reset} ${C.gray}[retry ${attempt}/${retries}]${C.reset} ${label}  ${e.shortMessage || e.message?.split('\n')[0]}  wait ${(wait/1000).toFixed(1)}s`);
       await sleep(wait);
     }
   }
@@ -281,11 +292,21 @@ class ApiClient {
     if (!set) return;
     for (const c of set) {
       const [pair] = c.split(';');
-      const [name] = pair.split('=');
-      const regex = new RegExp(`${name}=[^;]*`);
-      this.cookies = regex.test(this.cookies)
-        ? this.cookies.replace(regex, pair)
-        : (this.cookies ? this.cookies + '; ' : '') + pair;
+      const eqIdx = pair.indexOf('=');
+      if (eqIdx === -1) continue;
+      const name = pair.slice(0, eqIdx);
+      const val  = pair.slice(eqIdx + 1);
+      const token = `${name}=`;
+      // Replace existing cookie or append
+      const startIdx = this.cookies.lastIndexOf(token);
+      if (startIdx >= 0) {
+        const endIdx = this.cookies.indexOf(';', startIdx);
+        this.cookies = endIdx >= 0
+          ? this.cookies.slice(0, startIdx) + pair + this.cookies.slice(endIdx)
+          : this.cookies.slice(0, startIdx) + pair;
+      } else {
+        this.cookies = this.cookies ? this.cookies + '; ' + pair : pair;
+      }
     }
   }
   async _getCsrf() {
@@ -333,7 +354,7 @@ class ApiClient {
       } catch (_) {}
     }
 
-    // Step 3: Auth — try endpoints in order with/without signature
+    // Step 3: Auth � try endpoints in order with/without signature
     const authAttempts = [
       // With signature (SIWE)
       ...(nonce ? [async () => {
@@ -385,13 +406,13 @@ class ApiClient {
             }
             // 401 = session didn't stick, try next endpoint
           } catch (_) {
-            // Profile check failed but auth might still work — proceed
+            // Profile check failed but auth might still work � proceed
             return r.data;
           }
         }
-        // 404 means endpoint doesn't exist — try next
+        // 404 means endpoint doesn't exist � try next
         if (r.status === 404) continue;
-        // Other non-200 — might still work if it's a DAC-specific pattern
+        // Other non-200 � might still work if it's a DAC-specific pattern
         if (r.status !== 200) continue;
       } catch (e) {
         if (isServerError(e)) throw e;
@@ -399,7 +420,7 @@ class ApiClient {
       }
     }
 
-    throw new Error(`Auth failed — all endpoints tried (last status: ${lastStatus})`);
+    throw new Error(`Auth failed � all endpoints tried (last status: ${lastStatus})`);
   }
   async get(path) {
     const r = await withRetry(
@@ -418,7 +439,9 @@ class ApiClient {
     return r.data;
   }
   faucetClaim()        { return this.post('/api/inception/faucet/'); }
+  faucetStatus()       { return this.get('/api/inception/faucet/status/'); }
   crateOpen()          { return this.post('/api/inception/crate/open/', { crate_name: 'daily' }); }
+  crateStatus()        { return this.get('/api/inception/crate/status/'); }
   quantumCrateOpen()   { return this.post('/api/inception/crate/open/', { crate_name: 'quantum' }); }
   sync(tx)             { return this.post('/api/inception/sync/', { tx_hash: tx || '0x' }); }
   profile()            { return this.get('/api/inception/profile/'); }
@@ -454,7 +477,7 @@ class ApiClient {
     return this.post('/api/inception/nft/confirm-mint/', { rank_key: rankKey, tx_hash: txHash });
   }
 
-  // Activity badge (non-rank) — POST /api/inception/claim-badge/
+  // Activity badge (non-rank) � POST /api/inception/claim-badge/
   claimActivityBadge() {
     return this.post('/api/inception/claim-badge/');
   }
@@ -483,7 +506,7 @@ function pickRecipient(list, self) {
 
 // ================= WAIT FOR RPC =================
 async function waitForRpc(provider, addr) {
-  const MAX_ATTEMPTS = 6; // max ~45s total wait then skip
+  const MAX_ATTEMPTS = 3; // max ~15s total then skip (was 6/~45s)
   let attempt = 0;
   while (attempt < MAX_ATTEMPTS) {
     attempt++;
@@ -493,11 +516,11 @@ async function waitForRpc(provider, addr) {
       return true;
     } catch (e) {
       if (attempt >= MAX_ATTEMPTS) {
-        log(addr, `RPC not responding after ${MAX_ATTEMPTS} attempts — skip`, 'skip');
+        log(addr, `RPC not responding after ${MAX_ATTEMPTS} attempts  skip`, 'skip');
         return false;
       }
-      const wait = 5000 + Math.floor(Math.random() * 3000);
-      log(addr, `Waiting for RPC (${attempt}/${MAX_ATTEMPTS}) — retry in ${(wait/1000).toFixed(1)}s`, 'warn');
+      const wait = 4000 + Math.floor(Math.random() * 2000);
+      log(addr, `Waiting for RPC (${attempt}/${MAX_ATTEMPTS})  retry in ${(wait/1000).toFixed(1)}s`, 'warn');
       await sleep(wait);
     }
   }
@@ -513,7 +536,7 @@ async function sendTxs(signer, api, addr, stats) {
     bal = await withRetry(() => provider.getBalance(addr), { label: 'getBalance' });
   } catch (e) {
     if (isServerError(e)) {
-      log(addr, `RPC server error — skip TX: ${e.message}`, 'skip');
+      log(addr, `RPC server error � skip TX: ${e.message}`, 'skip');
     } else {
       log(addr, `getBalance failed: ${e.message}`, 'error');
     }
@@ -526,7 +549,7 @@ async function sendTxs(signer, api, addr, stats) {
   // Need at least: (txCount * txMinAmt) + burnAmount + gas buffer (0.01 DAC)
   const minRequired = (CFG.txCount * CFG.txMinAmt) + parseFloat(CFG.burnAmount) + 0.01;
   if (parseFloat(balDac) < minRequired) {
-    log(addr, `Balance too low (${balDac} DAC, need ~${minRequired.toFixed(4)}) — skip TX`, 'skip');
+    log(addr, `Balance too low (${balDac} DAC, need ~${minRequired.toFixed(4)}) � skip TX`, 'skip');
     return;
   }
 
@@ -562,12 +585,12 @@ async function sendTxs(signer, api, addr, stats) {
           txObj.gasPrice = feeData.gasPrice;
         }
         log(addr,
-          `TX ${i+1} ready — nonce: ${C.bold}${nonce}${C.reset} | gas: ${C.bold}${txObj.gasLimit}${C.reset} | to: ${C.dim}${to.slice(0,10)}...${C.reset}`,
+          `TX ${i+1} ready � nonce: ${C.bold}${nonce}${C.reset} | gas: ${C.bold}${txObj.gasLimit}${C.reset} | to: ${C.dim}${to.slice(0,10)}...${C.reset}`,
           'info'
         );
       } catch (e) {
         if (isServerError(e)) {
-          log(addr, `TX ${i+1} prepare server error — stop TX: ${e.message}`, 'skip');
+          log(addr, `TX ${i+1} prepare server error � stop TX: ${e.message}`, 'skip');
           break;
         }
         log(addr, `TX ${i+1} prepare failed: ${e.message}`, 'error');
@@ -577,7 +600,7 @@ async function sendTxs(signer, api, addr, stats) {
       log(addr, `TX ${i+1}/${txCount} ${C.dim}waiting for RPC...${C.reset}`, 'info');
       const rpcOk = await waitForRpc(provider, addr);
       if (!rpcOk) {
-        log(addr, `TX ${i+1} skipped — RPC unavailable`, 'skip');
+        log(addr, `TX ${i+1} skipped � RPC unavailable`, 'skip');
         break;
       }
 
@@ -596,7 +619,7 @@ async function sendTxs(signer, api, addr, stats) {
 
     } catch (e) {
       if (isServerError(e)) {
-        log(addr, `TX ${i+1} server error — skip remaining TX: ${e.message}`, 'skip');
+        log(addr, `TX ${i+1} server error � skip remaining TX: ${e.message}`, 'skip');
         break;
       }
       log(addr, `TX ${i+1} error: ${e.message}`, 'error');
@@ -608,10 +631,10 @@ async function sendTxs(signer, api, addr, stats) {
   stats.txTotal = txCount;
 }
 
-// ================= BADGE MINT (Rewritten — correct flow) =================
+// ================= BADGE MINT (Rewritten � correct flow) =================
 /**
  * Badge mint flow (from JS bundle reverse engineering):
- *   Source of truth  : profile.badges[] — already-earned badges
+ *   Source of truth  : profile.badges[] � already-earned badges
  *   Mintable on-chain: badge__key.startsWith('rank_') && nft_tx_hash === ''
  *   Step 1: POST /api/inception/nft/claim-signature/ {rank_key} ? {signature, rank_id}
  *   Step 2: contract.claimRank(uint8 rank_id, bytes "0x"+signature)
@@ -653,9 +676,9 @@ async function mintBadges(signer, api, addr, profileData, stats) {
   );
 
   if (!mintable.length) {
-    // [AUTO-DISABLE] Semua rank badge sudah ter-mint — skip seluruh proses on-chain
+    // [AUTO-DISABLE] Semua rank badge sudah ter-mint � skip seluruh proses on-chain
     log(addr,
-      `?? All rank badges already minted (${C.dim}${alreadyMinted.length} on-chain${C.reset}) — skipping badge mint`,
+      `?? All rank badges already minted (${C.dim}${alreadyMinted.length} on-chain${C.reset}) � skipping badge mint`,
       'skip'
     );
     stats.badges = `${alreadyMinted.length} already minted, 0 pending (auto-skipped)`;
@@ -703,12 +726,12 @@ async function mintBadges(signer, api, addr, profileData, stats) {
 
     } catch (e) {
       if (e instanceof RateLimitError) {
-        log(addr, `  [${badgeName}] rate limited — skip`, 'skip');
+        log(addr, `  [${badgeName}] rate limited � skip`, 'skip');
         skipped++;
         continue;
       }
       if (isServerError(e)) {
-        log(addr, `  [${badgeName}] API server error — skip: ${e.message}`, 'skip');
+        log(addr, `  [${badgeName}] API server error � skip: ${e.message}`, 'skip');
         skipped++;
         continue;
       }
@@ -731,7 +754,7 @@ async function mintBadges(signer, api, addr, profileData, stats) {
       const sigBytes  = signature.startsWith('0x') ? signature : `0x${signature}`;
       const rankIdNum = Number(rank_id); // ethers uint8 needs a JS number, not string
       if (isNaN(rankIdNum) || rankIdNum < 0 || rankIdNum > 255) {
-        log(addr, `  [${badgeName}] invalid rank_id=${rank_id} — skip`, 'warn');
+        log(addr, `  [${badgeName}] invalid rank_id=${rank_id} � skip`, 'warn');
         skipped++;
         continue;
       }
@@ -749,9 +772,9 @@ async function mintBadges(signer, api, addr, profileData, stats) {
           await api.confirmMint(rankKey, '0x').catch(() => {});
           continue;
         }
-        // "could not coalesce" or other unreadable RPC errors — still try to send
+        // "could not coalesce" or other unreadable RPC errors � still try to send
         if (/coalesce|unparseable|unknown.*revert|cannot.*estimate/i.test(msg)) {
-          log(addr, `  [${badgeName}] gas estimate unclear (${msg.slice(0,60)}) — attempting send anyway`, 'warn');
+          log(addr, `  [${badgeName}] gas estimate unclear (${msg.slice(0,60)}) � attempting send anyway`, 'warn');
         } else {
           // Real revert (signature invalid, not eligible, etc.)
           log(addr, `  [${badgeName}] gas estimate reverted: ${C.yellow}${msg.slice(0,100)}${C.reset}`, 'warn');
@@ -762,7 +785,7 @@ async function mintBadges(signer, api, addr, profileData, stats) {
 
       log(addr, `  On-chain claimRank(${rankIdNum}, sig) [${C.dim}${badgeName}${C.reset}]...`, 'info');
 
-      // Do NOT wrap in withRetry — "coalesce" errors have UNKNOWN_ERROR code
+      // Do NOT wrap in withRetry � "coalesce" errors have UNKNOWN_ERROR code
       // which would cause infinite retries. Handle directly instead.
       let tx;
       try {
@@ -777,8 +800,8 @@ async function mintBadges(signer, api, addr, profileData, stats) {
         }
         if (/coalesce|unparseable|unknown.*error|server_error/i.test(rawMsg) ||
             sendErr?.code === 'UNKNOWN_ERROR' || sendErr?.code === 'SERVER_ERROR') {
-          // RPC returned unreadable error — check actual on-chain state
-          log(addr, `  [${badgeName}] RPC error (${sendErr?.code ?? 'UNKNOWN'}) — checking hasMinted...`, 'warn');
+          // RPC returned unreadable error � check actual on-chain state
+          log(addr, `  [${badgeName}] RPC error (${sendErr?.code ?? 'UNKNOWN'}) � checking hasMinted...`, 'warn');
           try {
             const done = await contract.hasMinted(addr, rankIdNum);
             if (done) {
@@ -786,11 +809,11 @@ async function mintBadges(signer, api, addr, profileData, stats) {
               minted++;
               await api.confirmMint(rankKey, '0x').catch(() => {});
             } else {
-              log(addr, `  [${badgeName}] not minted yet + RPC error — skip`, 'warn');
+              log(addr, `  [${badgeName}] not minted yet + RPC error � skip`, 'warn');
               skipped++;
             }
           } catch (_) {
-            log(addr, `  [${badgeName}] hasMinted check failed — skip`, 'warn');
+            log(addr, `  [${badgeName}] hasMinted check failed � skip`, 'warn');
             skipped++;
           }
           continue;
@@ -803,11 +826,11 @@ async function mintBadges(signer, api, addr, profileData, stats) {
 
       log(addr, `  Waiting confirm... ${C.dim}${tx.hash.slice(0,18)}...${C.reset}`, 'info');
       try {
-        await tx.wait();
+        await withTimeout(tx.wait(), 60000, `badge ${badgeName} wait`);
       } catch (waitErr) {
-        // tx was sent but wait() failed — it may have confirmed anyway
+        // tx was sent but wait() failed � it may have confirmed anyway
         const hash = tx.hash;
-        log(addr, `  [${badgeName}] wait() error (${waitErr?.code}) — tx may still confirm: ${C.dim}${hash}${C.reset}`, 'warn');
+        log(addr, `  [${badgeName}] wait() error (${waitErr?.code}) � tx may still confirm: ${C.dim}${hash}${C.reset}`, 'warn');
         txHash = hash;
         minted++;
         await api.confirmMint(rankKey, hash).catch(() => {});
@@ -817,14 +840,14 @@ async function mintBadges(signer, api, addr, profileData, stats) {
       txHash = tx.hash;
       minted++;
       log(addr,
-        `  ${C.green}?${C.reset} [${C.bold}${badgeName}${C.reset}] minted — ${C.dim}${txHash}${C.reset}`,
+        `  ${C.green}?${C.reset} [${C.bold}${badgeName}${C.reset}] minted � ${C.dim}${txHash}${C.reset}`,
         'ok'
       );
 
     } catch (e) {
       const msg = (e?.message ?? e?.reason ?? String(e)).toLowerCase();
       if (isServerError(e)) {
-        log(addr, `  [${badgeName}] on-chain server error — skip: ${e.message}`, 'skip');
+        log(addr, `  [${badgeName}] on-chain server error � skip: ${e.message}`, 'skip');
         skipped++;
         continue;
       }
@@ -833,8 +856,8 @@ async function mintBadges(signer, api, addr, profileData, stats) {
         skipped++;
         // Still confirm to API
       } else if (/coalesce|unparseable|unknown.*error/i.test(msg)) {
-        // RPC returned unreadable error — check if minted by querying contract
-        log(addr, `  [${badgeName}] RPC error unreadable — checking on-chain status...`, 'warn');
+        // RPC returned unreadable error � check if minted by querying contract
+        log(addr, `  [${badgeName}] RPC error unreadable � checking on-chain status...`, 'warn');
         try {
           const rankIdNum2 = Number(rank_id);
           const alreadyDone = await contract.hasMinted(addr, rankIdNum2);
@@ -842,11 +865,11 @@ async function mintBadges(signer, api, addr, profileData, stats) {
             log(addr, `  [${badgeName}]: ${C.dim}confirmed already minted on-chain${C.reset}`, 'skip');
             skipped++;
           } else {
-            log(addr, `  [${badgeName}] not minted yet but RPC error — skip`, 'warn');
+            log(addr, `  [${badgeName}] not minted yet but RPC error � skip`, 'warn');
             skipped++;
           }
         } catch (_) {
-          log(addr, `  [${badgeName}] could not verify on-chain status — skip`, 'warn');
+          log(addr, `  [${badgeName}] could not verify on-chain status � skip`, 'warn');
           skipped++;
         }
         continue;
@@ -907,7 +930,7 @@ async function openQuantumCrates(api, addr, stats) {
               if (diffMs > 0) {
                 const h = Math.floor(diffMs / 3600000);
                 const m = Math.floor((diffMs % 3600000) / 60000);
-                skipMsg += ` — resets in ${h}h ${m}m`;
+                skipMsg += ` � resets in ${h}h ${m}m`;
               }
             } catch (_) {}
           }
@@ -931,7 +954,7 @@ async function openQuantumCrates(api, addr, stats) {
         totalQe       += r.reward?.amount ?? 0;
 
         log(addr,
-          `Quantum Crate ${opensSvr}/${limitSvr} ? — reward: ${C.green}${C.bold}${reward}${C.reset} | QE total: ${C.cyan}${qeTotal}${C.reset}`,
+          `Quantum Crate ${opensSvr}/${limitSvr} ? � reward: ${C.green}${C.bold}${reward}${C.reset} | QE total: ${C.cyan}${qeTotal}${C.reset}`,
           'ok'
         );
 
@@ -947,7 +970,7 @@ async function openQuantumCrates(api, addr, stats) {
               if (diffMs > 0) {
                 const h = Math.floor(diffMs / 3600000);
                 const m = Math.floor((diffMs % 3600000) / 60000);
-                resetMsg += ` — resets in ${h}h ${m}m`;
+                resetMsg += ` � resets in ${h}h ${m}m`;
               }
             } catch (_) {}
           } else {
@@ -962,7 +985,7 @@ async function openQuantumCrates(api, addr, stats) {
                 if (diffMs > 0) {
                   const h = Math.floor(diffMs / 3600000);
                   const m = Math.floor((diffMs % 3600000) / 60000);
-                  resetMsg += ` — resets in ${h}h ${m}m`;
+                  resetMsg += ` � resets in ${h}h ${m}m`;
                 }
               }
             } catch (_) {}
@@ -977,11 +1000,11 @@ async function openQuantumCrates(api, addr, stats) {
 
     } catch (e) {
       if (e instanceof RateLimitError) {
-        log(addr, `Quantum Crate: ${C.yellow}rate limited (429) — skip${C.reset}`, 'skip');
+        log(addr, `Quantum Crate: ${C.yellow}rate limited (429) � skip${C.reset}`, 'skip');
         break;
       }
       if (isServerError(e)) {
-        log(addr, `Quantum Crate server error — stop: ${e.message}`, 'skip');
+        log(addr, `Quantum Crate server error � stop: ${e.message}`, 'skip');
         break;
       }
       log(addr, `Quantum Crate error: ${e.message}`, 'warn');
@@ -1004,15 +1027,15 @@ async function burnForQE(signer, api, addr, stats) {
       () => c.burnForQE({ value: ethers.parseEther(CFG.burnAmount) }),
       { label: 'burnForQE' }
     );
-    await withRetry(() => tx.wait(), { label: 'burnForQE.wait' });
-    log(addr, `Burn success — ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
+    await withTimeout(tx.wait(), 60000, 'burnForQE.wait');
+    log(addr, `Burn success � ${C.dim}${tx.hash.slice(0,14)}...${C.reset}`, 'ok');
     stats.burn = 'success';
     await api.confirmBurn(tx.hash).catch(e => {
       log(addr, `Burn confirm API error: ${e.message}`, 'warn');
     });
   } catch (e) {
     if (isServerError(e)) {
-      log(addr, `Burn server error — skip: ${e.message}`, 'skip');
+      log(addr, `Burn server error � skip: ${e.message}`, 'skip');
     } else {
       log(addr, `Burn skipped: ${e.message}`, 'warn');
     }
@@ -1044,13 +1067,13 @@ async function completeActivities(api, addr, stats) {
           log(addr, `Task [${C.bold}${taskKey}${C.reset}] claimed${qe ? ` +${qe} QE` : ''}`, 'ok');
           synced++;
         } else {
-          log(addr, `Task [${C.bold}${taskKey}${C.reset}] synced — ${C.dim}${status || 'pending'}${C.reset}`, 'info');
+          log(addr, `Task [${C.bold}${taskKey}${C.reset}] synced � ${C.dim}${status || 'pending'}${C.reset}`, 'info');
         }
       } else if (r?.error) {
         if (/already|not.eligible|not.enough|no.tx/i.test(r.error)) {
           log(addr, `Task [${taskKey}] ${C.dim}${r.error}${C.reset}`, 'skip');
         } else if (/not.authenticated|unauthorized|login.required/i.test(r.error)) {
-          log(addr, `Tasks: ${C.yellow}session expired — stopping tasks${C.reset}`, 'warn');
+          log(addr, `Tasks: ${C.yellow}session expired � stopping tasks${C.reset}`, 'warn');
           failed++;
           break; // no point continuing if session is dead
         } else {
@@ -1059,12 +1082,12 @@ async function completeActivities(api, addr, stats) {
       }
     } catch (e) {
       if (e instanceof RateLimitError) {
-        log(addr, `Tasks: ${C.yellow}rate limited (429) — skip remaining${C.reset}`, 'skip');
+        log(addr, `Tasks: ${C.yellow}rate limited (429) � skip remaining${C.reset}`, 'skip');
         failed++;
         break;
       }
       if (isServerError(e)) {
-        log(addr, `Task sync server error — skip remaining: ${e.message}`, 'skip');
+        log(addr, `Task sync server error � skip remaining: ${e.message}`, 'skip');
         failed++;
         break;
       }
@@ -1091,7 +1114,7 @@ async function completeActivities(api, addr, stats) {
       }
     } catch (e) {
       if (isServerError(e)) {
-        log(addr, `Visit server error — skip: ${e.message}`, 'skip');
+        log(addr, `Visit server error � skip: ${e.message}`, 'skip');
         failed++;
         break;
       }
@@ -1109,7 +1132,7 @@ async function completeActivities(api, addr, stats) {
 // ================= WALLET =================
 async function runWallet(pk, proxy, index, total) {
   const wallet   = new ethers.Wallet(pk);
-  const evm      = await accounts.valid(pk);
+  const sccount  = await accounts.valid(pk);
   const addr     = wallet.address;
   const provider = createProvider(proxy);
   const signer   = wallet.connect(provider);
@@ -1126,7 +1149,7 @@ async function runWallet(pk, proxy, index, total) {
     log(addr, 'Auth OK', 'ok');
   } catch (e) {
     if (isServerError(e)) {
-      log(addr, `Auth server error — skip wallet: ${e.message}`, 'skip');
+      log(addr, `Auth server error � skip wallet: ${e.message}`, 'skip');
     } else {
       log(addr, `Auth failed: ${e.message}`, 'error');
     }
@@ -1138,7 +1161,7 @@ async function runWallet(pk, proxy, index, total) {
     const f = await api.faucetClaim();
 
     if (f?.code === 'social_required') {
-      log(addr, `Faucet skipped — ${C.yellow}${f.error}${C.reset}`, 'warn');
+      log(addr, `Faucet skipped � ${C.yellow}${f.error}${C.reset}`, 'warn');
       log(addr, `${C.dim}?? Link your X or Discord at https://inception.dachain.io to activate faucet.${C.reset}`, 'warn');
       stats.faucet = 'social_required';
 
@@ -1159,12 +1182,12 @@ async function runWallet(pk, proxy, index, total) {
           if (diffMs > 0) {
             const h = Math.floor(diffMs / 3600000);
             const m = Math.floor((diffMs % 3600000) / 60000);
-            timerMsg = `already claimed — next in ${h}h ${m}m (${next.toLocaleTimeString('id-ID', {hour12:false})})`;
+            timerMsg = `already claimed � next in ${h}h ${m}m (${next.toLocaleTimeString('id-ID', {hour12:false})})`;
           } else {
             timerMsg = 'already claimed (reset soon)';
           }
         } catch (_) {
-          timerMsg = `already claimed — next: ${nextTime}`;
+          timerMsg = `already claimed � next: ${nextTime}`;
         }
       } else {
         // Fetch faucet status for timer if not in response
@@ -1178,7 +1201,7 @@ async function runWallet(pk, proxy, index, total) {
             if (diffMs > 0) {
               const h = Math.floor(diffMs / 3600000);
               const m = Math.floor((diffMs % 3600000) / 60000);
-              timerMsg = `already claimed — next in ${h}h ${m}m`;
+              timerMsg = `already claimed � next in ${h}h ${m}m`;
             }
           }
         } catch (_) {}
@@ -1188,10 +1211,10 @@ async function runWallet(pk, proxy, index, total) {
 
     } else if (f?.error) {
       if (/not.authenticated|unauthorized|login.required/i.test(f.error ?? '')) {
-        log(addr, `Faucet: ${C.yellow}session not authenticated — auth may need signature${C.reset}`, 'warn');
+        log(addr, `Faucet: ${C.yellow}session not authenticated � auth may need signature${C.reset}`, 'warn');
         log(addr, `${C.dim}?? Check auth endpoint/signature flow in init()${C.reset}`, 'info');
       } else {
-        log(addr, `Faucet error — ${C.red}${f.error}${C.reset} (code: ${f?.code ?? 'none'})`, 'warn');
+        log(addr, `Faucet error � ${C.red}${f.error}${C.reset} (code: ${f?.code ?? 'none'})`, 'warn');
       }
       stats.faucet = `error: ${f.error}`;
 
@@ -1203,10 +1226,10 @@ async function runWallet(pk, proxy, index, total) {
 
   } catch (e) {
     if (e instanceof RateLimitError) {
-      log(addr, `Faucet: ${C.yellow}rate limited (429) — skip${C.reset}`, 'skip');
+      log(addr, `Faucet: ${C.yellow}rate limited (429) � skip${C.reset}`, 'skip');
       stats.faucet = 'rate limited';
     } else if (isServerError(e)) {
-      log(addr, `Faucet server error — skip: ${e.message}`, 'skip');
+      log(addr, `Faucet server error � skip: ${e.message}`, 'skip');
       stats.faucet = 'server error';
     } else {
       log(addr, `Faucet error: ${e.message}`, 'warn');
@@ -1225,7 +1248,7 @@ async function runWallet(pk, proxy, index, total) {
   // 4. Burn DACC for QE
   await burnForQE(signer, api, addr, stats);
 
-  // 5. Fetch profile early — provides badge list + faucet timer (reused by mintBadges)
+  // 5. Fetch profile early � provides badge list + faucet timer (reused by mintBadges)
   let profileData = null;
   try {
     profileData = await api.profile();
@@ -1241,24 +1264,24 @@ async function runWallet(pk, proxy, index, total) {
       log(addr, `Faucet next: ${C.yellow}${h}h ${m}m ${s}s${C.reset}`, 'info');
     }
   } catch (e) {
-    if (isServerError(e)) log(addr, `Profile server error — skip: ${e.message}`, 'skip');
+    if (isServerError(e)) log(addr, `Profile server error � skip: ${e.message}`, 'skip');
   }
 
-  // 5. Mint Badges (Enhanced) — pass profile data so badge list is reused
+  // 5. Mint Badges (Enhanced) � pass profile data so badge list is reused
   await mintBadges(signer, api, addr, profileData, stats);
 
-  // 6. Activity Tasks — DISABLED (removed to save ~14s per wallet)
+  // 6. Activity Tasks � DISABLED (removed to save ~14s per wallet)
   // await completeActivities(api, addr, stats);
   // await sleep(2000);
 
-  // 7. Profile / QE balance (already fetched above — just show summary)
+  // 7. Profile / QE balance (already fetched above � just show summary)
   if (!profileData) {
     try {
       profileData = await api.profile();
       stats.qe = profileData?.qe_balance ?? '-';
       log(addr, `QE Balance: ${C.bold}${C.green}${stats.qe}${C.reset}`, 'ok');
     } catch (e) {
-      if (isServerError(e)) log(addr, `Profile server error — skip: ${e.message}`, 'skip');
+      if (isServerError(e)) log(addr, `Profile server error � skip: ${e.message}`, 'skip');
     }
   }
 
@@ -1278,7 +1301,7 @@ async function runAll() {
   const proxies = loadProxies();
 
   console.log(`\n${C.bold}${C.cyan}${'='.repeat(55)}${C.reset}`);
-  console.log(`${C.bold}${C.cyan}  DAC Inception Bot — ${keys.length} wallet(s)${C.reset}`);
+  console.log(`${C.bold}${C.cyan}  DAC Inception Bot � ${keys.length} wallet(s)${C.reset}`);
   console.log(`${C.bold}${C.cyan}  Badge Mint: ${CFG.mintBadge ? C.green+'ENABLED' : C.red+'DISABLED'}${C.reset}${C.bold}${C.cyan} | Contract: ${CFG.badgeContract.slice(0,10)}...${C.reset}`);
   console.log(`${C.bold}${C.cyan}${'='.repeat(55)}${C.reset}\n`);
 
@@ -1290,13 +1313,13 @@ async function runAll() {
       await runWallet(keys[i], proxy, i + 1, keys.length);
       done++;
     } catch (e) {
-      console.log(`${ts()} ${C.red}?${C.reset} Wallet ${i+1} unexpected error — skip: ${e.message}`);
+      console.log(`${ts()} ${C.red}?${C.reset} Wallet ${i+1} unexpected error � skip: ${e.message}`);
       skipped++;
     }
   }
 
   divider('-');
-  console.log(`${ts()} ${C.bold}${C.green}? Cycle done — ${done} OK, ${skipped} skipped${C.reset}`);
+  console.log(`${ts()} ${C.bold}${C.green}? Cycle done � ${done} OK, ${skipped} skipped${C.reset}`);
   divider('-');
   console.log();
 }
@@ -1312,9 +1335,9 @@ function ask(rl, question, defaultVal) {
 }
 
 async function askConfig() {
-  // If stdin is not a TTY (PM2, nohup, piped, screen) — skip prompts, use defaults
+  // If stdin is not a TTY (PM2, nohup, piped, screen) � skip prompts, use defaults
   if (!process.stdin.isTTY) {
-    console.log(`\n${C.bold}${C.cyan}  DAC Inception Bot — Non-interactive mode (defaults used)${C.reset}`);
+    console.log(`\n${C.bold}${C.cyan}  DAC Inception Bot � Non-interactive mode (defaults used)${C.reset}`);
     console.log(`  ${C.dim}TX: ${CFG.txCount} | Burn: ${CFG.burnAmount} DAC | Badge: ${CFG.mintBadge ? 'ON' : 'OFF'}${C.reset}\n`);
     return;
   }
@@ -1357,7 +1380,7 @@ async function askConfig() {
   console.log();
   console.log(`${C.bold}${C.green}  Config summary:${C.reset}`);
   console.log(`  ${C.cyan}TX/wallet  :${C.reset} ${C.bold}${txCount} TX${C.reset}`);
-  console.log(`  ${C.cyan}TX amount  :${C.reset} ${C.bold}${txMinAmt.toFixed(4)}–${txMaxAmt} DAC each${C.reset}`);
+  console.log(`  ${C.cyan}TX amount  :${C.reset} ${C.bold}${txMinAmt.toFixed(4)}�${txMaxAmt} DAC each${C.reset}`);
   console.log(`  ${C.cyan}Burn/wallet:${C.reset} ${C.bold}${burnAmount} DAC${C.reset}`);
   console.log(`  ${C.cyan}Mint badge :${C.reset} ${C.bold}${CFG.mintBadge ? C.green+'YES' : C.red+'NO'}${C.reset}`);
   console.log();
