@@ -20,6 +20,7 @@ An automated bot to perform daily on-chain activities on the **DAC Inception Tes
 | 🛡️ **Error Handling** | Skips wallet on persistent server errors — no crash |
 | ⚡ **429 Handling** | Exponential backoff on rate-limit — skips after 2 consecutive 429s |
 | 🔐 **SIWE Auth** | Sign-In With Ethereum (nonce + signature) with address-only fallback |
+| ⏱️ **RPC Timeout Skip** | Automatically skips wallet after **5 consecutive RPC timeout errors** — resets on success |
 
 ---
 
@@ -111,8 +112,9 @@ nohup node bot.js &
 | `loopMaxHr` | `12` | Maximum hours between cycles |
 | `qcrateMax` | `5` | Max quantum crates per cycle |
 | `mintBadge` | `true` | Enable rank badge minting (auto-skipped if all minted) |
+| `MAX_TIMEOUT_ERRORS` | `5` | Max consecutive RPC timeout errors before wallet is skipped |
 
-> To change defaults, edit the `CFG` object at the top of `bot.js`.
+> To change defaults, edit the `CFG` object (and `MAX_TIMEOUT_ERRORS` constant) at the top of `bot.js`.
 
 ---
 
@@ -129,13 +131,15 @@ nohup node bot.js &
 | Between badge mints | **1.5 seconds** |
 | Between wallets | **3–6 seconds** |
 | Between cycles (main loop) | Random **11–12 hours** |
-| RPC wait (per check) | **5–8 seconds**, max **6 attempts** |
+| RPC wait (per check) | **5–8 seconds**, max **3 attempts** then skip |
 
 ---
 
 ## 🔄 Execution Flow (per wallet)
 
 ```
+Timeout Skip Check  →  skip immediately if wallet reached 5x consecutive timeout
+    │
 Auth (SIWE nonce+sign → fallback address-only)
     │
     ├─ 1. Faucet Claim          → shows "next in Xh Ym" if already claimed
@@ -154,6 +158,7 @@ Auth (SIWE nonce+sign → fallback address-only)
     ├─ 7. Activity Tasks        → DISABLED
     │
     └─ 8. Print Summary
+         └─ On success: reset timeout counter for this wallet
 ```
 
 ---
@@ -196,9 +201,51 @@ Rank badges are the only badges minted on-chain. Detection:
 | HTTP `500/502/503/504` | Linear backoff, up to 5 retries |
 | `UNKNOWN_ERROR` / "coalesce" | No retry — calls `hasMinted()` to check on-chain state |
 | `INSUFFICIENT_FUNDS` | Logged and skipped |
-| RPC unreachable | Retries 6× (~45 s total), then skips TX for that wallet |
+| RPC unreachable | Retries 3× (~15 s total), then skips TX for that wallet |
+| **RPC timeout (≥ 5 consecutive)** | **Wallet skipped for the entire cycle — counter resets on next successful run** |
 | Persistent server error | Wallet skipped, bot continues to next |
 | `unhandledRejection` / `uncaughtException` | Suppressed if RPC/network error — no crash |
+
+---
+
+## ⏱️ RPC Timeout Skip — How It Works
+
+This feature prevents the bot from getting stuck or wasting time on wallets with consistently unreachable RPC endpoints.
+
+### Logic
+
+```
+Per cycle, before processing each wallet:
+  if timeout_error_count[wallet] >= 5  →  skip wallet, log warning, continue
+
+During wallet execution:
+  if RPC timeout error occurs  →  increment timeout_error_count[wallet]
+  if wallet completes successfully  →  reset timeout_error_count[wallet] to 0
+```
+
+### Counter Behaviour
+
+| Situation | Counter |
+|-----------|---------|
+| RPC timeout error detected | `+1` per occurrence |
+| Wallet finishes successfully | Reset to `0` |
+| Counter reaches `5` | Wallet **skipped** in current and future cycles until a successful run resets it |
+
+### Console Output
+
+```
+[10:30:01] ⚠ Wallet 3 (0x000..aB12...) skipped — RPC timeout error reached 5x
+[10:30:05] ⚠ Wallet 7 RPC timeout #3/5 — retrying next cycle
+[10:30:09] ⚠ Wallet 9 RPC timeout #5/5 — will be SKIPPED next cycle
+```
+
+### Configuration
+
+To change the threshold, edit `MAX_TIMEOUT_ERRORS` near the top of `bot.js`:
+
+```js
+const MAX_TIMEOUT_ERRORS = 5; // increase to be more lenient, decrease to skip faster
+```
 
 ---
 
@@ -243,15 +290,17 @@ Rank badges are the only badges minted on-chain. Detection:
 
 ## 🔧 Optimization Notes
 
-The following changes have been applied to reduce per-wallet execution time:
+The following changes have been applied to reduce per-wallet execution time and improve reliability:
 
-| Change | Before | After | Time Saved |
-|--------|--------|-------|------------|
-| TX count | `5` | `3` | ~33 s |
-| Sleep between TXs | `2–5 s` | `1–2 s` | ~6 s |
-| Activity Tasks | Enabled | **Disabled** | ~14 s |
-| Badge Mint | Always runs | **Auto-skipped if all minted** | ~60–100 s |
-| **Total saved** | | | **~113–153 s/wallet** |
+| Change | Before | After | Benefit |
+|--------|--------|-------|---------|
+| TX count | `5` | `3` | ~33 s saved |
+| Sleep between TXs | `2–5 s` | `1–2 s` | ~6 s saved |
+| Activity Tasks | Enabled | **Disabled** | ~14 s saved |
+| Badge Mint | Always runs | **Auto-skipped if all minted** | ~60–100 s saved |
+| RPC max attempts | `6` (~45 s) | `3` (~15 s) | ~30 s saved |
+| **RPC timeout skip** | No limit | **Skip after 5 consecutive timeouts** | Prevents infinite stalls |
+| **Total saved** | | | **~143–183 s/wallet** |
 
 ---
 
@@ -259,7 +308,7 @@ The following changes have been applied to reduce per-wallet execution time:
 
 ```
 dachain-bot/
-├── bot.js           ← main script (non-interactive, v2.3 optimized)
+├── bot.js           ← main script (non-interactive, v2.4 optimized)
 ├── pk.txt           ← wallet private keys (required)
 ├── address.txt      ← TX target addresses (optional)
 ├── proxy.txt        ← proxy list (optional)
