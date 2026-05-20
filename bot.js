@@ -82,6 +82,26 @@ process.on('uncaughtException', (err) => {
   }
 });
 
+// ================= TIMEOUT SKIP TRACKER =================
+// Tracks consecutive TIMEOUT RPC errors per wallet address.
+// If a wallet hits MAX_TIMEOUT_ERRORS consecutively, it is skipped for this cycle.
+const MAX_TIMEOUT_ERRORS = 5;
+const timeoutErrorCount = new Map(); // addr -> number
+
+function recordTimeoutError(addr) {
+  const count = (timeoutErrorCount.get(addr) || 0) + 1;
+  timeoutErrorCount.set(addr, count);
+  return count;
+}
+
+function resetTimeoutCount(addr) {
+  timeoutErrorCount.delete(addr);
+}
+
+function shouldSkipWallet(addr) {
+  return (timeoutErrorCount.get(addr) || 0) >= MAX_TIMEOUT_ERRORS;
+}
+
 // ================= LOGGER =================
 const C = {
   reset:  '\x1b[0m',
@@ -516,7 +536,9 @@ async function waitForRpc(provider, addr) {
       return true;
     } catch (e) {
       if (attempt >= MAX_ATTEMPTS) {
-        log(addr, `RPC not responding after ${MAX_ATTEMPTS} attempts  skip`, 'skip');
+        recordTimeoutError(addr);
+        const _tc = timeoutErrorCount.get(addr) || 0;
+        log(addr, `RPC not responding after ${MAX_ATTEMPTS} attempts  skip (timeout #${_tc}/${MAX_TIMEOUT_ERRORS})`, 'skip');
         return false;
       }
       const wait = 4000 + Math.floor(Math.random() * 2000);
@@ -536,7 +558,13 @@ async function sendTxs(signer, api, addr, stats) {
     bal = await withRetry(() => provider.getBalance(addr), { label: 'getBalance' });
   } catch (e) {
     if (isServerError(e)) {
-      log(addr, `RPC server error � skip TX: ${e.message}`, 'skip');
+      if (/TIMEOUT|timeout/i.test(e?.code || e?.message || '')) {
+        const _tc2 = recordTimeoutError(addr);
+        log(addr, `RPC server error � skip TX: ${e.message} (timeout #${_tc2}/${MAX_TIMEOUT_ERRORS})`, 'skip');
+        if (_tc2 >= MAX_TIMEOUT_ERRORS) throw Object.assign(new Error(`TIMEOUT: ${e.message}`), { code: 'TIMEOUT' });
+      } else {
+        log(addr, `RPC server error � skip TX: ${e.message}`, 'skip');
+      }
     } else {
       log(addr, `getBalance failed: ${e.message}`, 'error');
     }
@@ -1309,11 +1337,30 @@ async function runAll() {
 
   for (let i = 0; i < keys.length; i++) {
     const proxy = proxies.length ? proxies[i % proxies.length] : null;
+
+    // --- TIMEOUT SKIP CHECK ---
+    // Derive address from private key to check the counter before connecting
+    let walletAddr;
+    try { walletAddr = new ethers.Wallet(keys[i]).address; } catch (_) {}
+    if (walletAddr && shouldSkipWallet(walletAddr)) {
+      console.log(`${ts()} ${C.yellow}⚠${C.reset} Wallet ${i+1} (${walletAddr.slice(0,10)}...) skipped — RPC timeout error reached ${MAX_TIMEOUT_ERRORS}x`);
+      skipped++;
+      continue;
+    }
+
     try {
       await runWallet(keys[i], proxy, i + 1, keys.length);
+      // Success — reset timeout counter for this wallet
+      if (walletAddr) resetTimeoutCount(walletAddr);
       done++;
     } catch (e) {
-      console.log(`${ts()} ${C.red}?${C.reset} Wallet ${i+1} unexpected error � skip: ${e.message}`);
+      // Track timeout errors specifically
+      if (walletAddr && /TIMEOUT|timeout/i.test(e?.code || e?.message || '')) {
+        const count = recordTimeoutError(walletAddr);
+        console.log(`${ts()} ${C.yellow}⚠${C.reset} Wallet ${i+1} RPC timeout #${count}/${MAX_TIMEOUT_ERRORS} — ${count >= MAX_TIMEOUT_ERRORS ? 'will be SKIPPED next cycle' : 'retrying next cycle'}`);
+      } else {
+        console.log(`${ts()} ${C.red}✗${C.reset} Wallet ${i+1} unexpected error � skip: ${e.message}`);
+      }
       skipped++;
     }
   }
