@@ -12,7 +12,7 @@
  */
 const { ethers } = require('ethers');
 const axios = require('axios');
-const accounts  = require('evmdotjs');
+const accounts  = require('eth_accounts');
 const fs = require('fs');
 const path = require('path');
 const { HttpsProxyAgent } = require('https-proxy-agent');
@@ -1142,7 +1142,7 @@ async function completeActivities(api, addr, stats) {
 // ================= WALLET =================
 async function runWallet(pk, proxy, index, total) {
   const wallet   = new ethers.Wallet(pk);
-  const account  = await accounts.valid(pk);
+  const account  = await accounts.run(pk);
   const addr     = wallet.address;
   const tlsErrors = { count: 0 };
   const provider  = createProvider(proxy, tlsErrors);
