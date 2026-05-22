@@ -8,7 +8,7 @@ An automated bot to perform daily on-chain activities on the **DAC Inception Tes
 
 | Feature | Description |
 |---------|-------------|
-| 💸 **Send TX** | 3 TX per wallet per cycle — amount auto-scales to balance |
+| 💸 **Send TX** | Custom transaction count — amount auto-scales to balance |
 | 🚰 **Faucet** | Auto-claim daily faucet — shows cooldown timer if already claimed |
 | 📦 **Quantum Crate** | Open up to 5 Quantum Crates per day (150 QE each) — shows reset timer |
 | 🔥 **Burn DACC** | Burn DACC to earn QE (configurable, max 0.1 DAC/cycle) |
