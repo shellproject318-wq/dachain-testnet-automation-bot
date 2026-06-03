@@ -25,7 +25,8 @@ const ADDRESS_FILE= path.join(DIR, 'address.txt');
 const PROXY_FILE  = path.join(DIR, 'proxy.txt');
 const STATE_FILE  = path.join(DIR, 'state.json');
 const CFG = {
-  rpc:            'https://rpctest.dachain.tech',
+  rpc:            'https://rpctest.dachain.tech', // Primary RPC
+  rpcs:           ['https://rpctest.dachain.tech', 'https://rpctest05.dachain.io'], // Fallback list
   chainId:        21894,
   api:            'https://inception.dachain.io',
   qeContract:     '0x3691A78bE270dB1f3b1a86177A8f23F89A8Cef24',
@@ -259,14 +260,21 @@ function createProxyAgent(proxy) {
 }
 function createProvider(proxy, tlsTracker = null) {
   let provider;
+  const rpcUrls = CFG.rpcs || [CFG.rpc];
+  
   if (!proxy) {
-    provider = new ethers.JsonRpcProvider(CFG.rpc);
+    const providers = rpcUrls.map(url => new ethers.JsonRpcProvider(url));
+    provider = new ethers.FallbackProvider(providers);
   } else {
     const agent = createProxyAgent(proxy);
-    const fetchReq = new ethers.FetchRequest(CFG.rpc);
-    fetchReq.getUrlFunc = ethers.FetchRequest.createGetUrlFunc({ agent });
-    provider = new ethers.JsonRpcProvider(fetchReq);
+    const providers = rpcUrls.map(url => {
+      const fetchReq = new ethers.FetchRequest(url);
+      fetchReq.getUrlFunc = ethers.FetchRequest.createGetUrlFunc({ agent });
+      return new ethers.JsonRpcProvider(fetchReq);
+    });
+    provider = new ethers.FallbackProvider(providers);
   }
+  
   provider.on('error', (err) => {
     const msg = err?.message || String(err);
     console.log(`\x1b[90m[${new Date().toLocaleTimeString('en-US', { hour12: false })}]\x1b[0m \x1b[33m?\x1b[0m \x1b[2m[provider.error]\x1b[0m ${msg.split('\n')[0]}`);
@@ -421,7 +429,7 @@ class ApiClient {
         // Other non-200 ? might still work if it's a DAC-specific pattern
         if (r.status !== 200) continue;
       } catch (e) {
-        if (isServerError(e)) throw e;
+        console.log(`${ts()} ${C.yellow}?${C.reset} [ApiClient.init] Endpoint attempt failed: ${e.message || String(e)}`);
         continue;
       }
     }
@@ -503,11 +511,9 @@ function loadAddresses() {
 }
 function pickRecipient(list, self) {
   if (!list.length) return ethers.Wallet.createRandom().address;
-  let addr;
-  do {
-    addr = list[Math.floor(Math.random() * list.length)];
-  } while (addr.toLowerCase() === self.toLowerCase());
-  return addr;
+  const filtered = list.filter(x => x.toLowerCase() !== self.toLowerCase());
+  if (!filtered.length) return ethers.Wallet.createRandom().address;
+  return filtered[Math.floor(Math.random() * filtered.length)];
 }
 
 // ================= WAIT FOR RPC =================
@@ -1305,15 +1311,13 @@ async function runWallet(pk, proxy, index, total) {
   // await completeActivities(api, addr, stats);
   // await sleep(2000);
 
-  // 7. Profile / QE balance (already fetched above ? just show summary)
-  if (!profileData) {
-    try {
-      profileData = await api.profile();
-      stats.qe = profileData?.qe_balance ?? '-';
-      log(addr, `QE Balance: ${C.bold}${C.green}${stats.qe}${C.reset}`, 'ok');
-    } catch (e) {
-      if (isServerError(e)) log(addr, `Profile server error ? skip: ${e.message}`, 'skip');
-    }
+  // 7. Profile / QE balance (Always fetch updated balance at the end of the cycle)
+  try {
+    profileData = await api.profile();
+    stats.qe = profileData?.qe_balance ?? '-';
+    log(addr, `QE Balance (Updated): ${C.bold}${C.green}${stats.qe}${C.reset}`, 'ok');
+  } catch (e) {
+    if (isServerError(e)) log(addr, `Profile server error ? skip: ${e.message}`, 'skip');
   }
 
   logSummary(addr, stats);
@@ -1387,7 +1391,7 @@ async function askConfig() {
 
   const txRaw    = await ask(rl, `  ${C.yellow}TX count per wallet  ${C.reset} ${C.dim}[default: ${CFG.txCount}, enter 0 to skip TX]${C.reset}: `,    String(CFG.txCount));
   const txAmtRaw = await ask(rl, `  ${C.yellow}TX max amount (DAC)  ${C.reset} ${C.dim}[default: ${CFG.txMaxAmt}, auto-scaled to balance]${C.reset}: `, String(CFG.txMaxAmt));
-  const burnRaw  = await ask(rl, `  ${C.yellow}Burn amount (DAC)    ${C.reset} ${C.dim}[default: ${CFG.burnAmount}, max: 0.1, enter 0 to skip burn]${C.reset}: `,  String(CFG.burnAmount));
+  const burnRaw  = await ask(rl, `  ${C.yellow}Burn amount (DAC)    ${C.reset} ${C.dim}[default: ${CFG.burnAmount}, max: 100, enter 0 to skip burn]${C.reset}: `,  String(CFG.burnAmount));
   const mintRaw  = await ask(rl, `  ${C.yellow}Mint badges? (y/n)   ${C.reset} ${C.dim}[default: y]${C.reset}: `, 'y');
 
   rl.close();
@@ -1402,7 +1406,7 @@ async function askConfig() {
   const skipBurn   = burnParsed === 0;
   const burnAmount = skipBurn
     ? '0'
-    : ((burnParsed > 0 && burnParsed <= 0.1)
+    : ((burnParsed > 0 && burnParsed <= 100)
         ? burnParsed.toFixed(6)
         : CFG.burnAmount); // fall back to default if > 0.1
 
