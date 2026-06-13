@@ -80,7 +80,7 @@ user:pass@ip:port
 ### 4. Run the Bot
 
 ```bash
-node bot.js
+node auto.js
 ```
 
 The bot starts immediately, prints a config summary, and loops every **11–12 hours** automatically.
@@ -93,7 +93,7 @@ pm2 start bot.js --name dachain-bot
 pm2 save && pm2 logs dachain-bot
 
 # nohup
-nohup node bot.js &
+nohup node auto.js &
 
 # Cron (runs at 00:00 and 12:00 UTC)
 0 0,12 * * * cd /root/dachain-bot && node bot.js >> bot.log 2>&1
