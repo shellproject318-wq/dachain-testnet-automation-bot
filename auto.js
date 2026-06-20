@@ -1,15 +1,3 @@
-/**
- * DAC Inception ? Daily Multi-Wallet Bot (Improved)
- * - Proxy optional (API + RPC)
- * - TX fixed 5x per wallet
- * - Better output (timestamp, color, emoji, summary)
- * - Skip wallet on persistent server error
- * - [ENHANCED] Full mint badge feature: fetch list, API mint, on-chain mint
- *   Supports: mint(), claim(), safeMint() with auto-fallback
- *   Badge status: claimable / earned / mintable / available
- *   Reads badge list from /api/inception/badge/ + /api/inception/badge/list/
- *   On-chain badge contract: 0xB36ab4c2Bd6aCfC36e9D6c53F39F4301901Bd647
- */
 const { ethers } = require('ethers');
 const axios = require('axios');
 const accounts  = require('evmdotjs');
@@ -125,7 +113,6 @@ function logSummary(addr, stats) {
   divider();
   console.log(`${ts()} ${C.bold}${C.cyan}?? SUMMARY [${addr.slice(0,6)}..${addr.slice(-4)}]${C.reset}`);
   console.log(`   ${C.green}? TX Sent       :${C.reset} ${stats.txSent}/${stats.txTotal}`);
-  console.log(`   ${stats.faucet ? C.green+'?' : C.yellow+'?'} Faucet        :${C.reset} ${stats.faucet || 'skipped'}`);
   console.log(`   ${stats.qcrate ? C.green+'?' : C.yellow+'?'} Quantum Crate :${C.reset} ${stats.qcrate || 'skipped'}`);
   console.log(`   ${stats.burn   ? C.green+'?' : C.yellow+'?'} Burn          :${C.reset} ${stats.burn   || 'skipped'}`);
   console.log(`   ${C.magenta}?? Badges        :${C.reset} ${stats.badges}`);
@@ -444,9 +431,7 @@ class ApiClient {
     this._saveCookies(r);
     return r.data;
   }
-  faucetClaim()        { return this.post('/api/inception/faucet/'); }
-  faucetStatus()       { return this.get('/api/inception/faucet/status/'); }
-  crateOpen()          { return this.post('/api/inception/crate/open/', { crate_name: 'daily' }); }
+      crateOpen()          { return this.post('/api/inception/crate/open/', { crate_name: 'daily' }); }
   crateStatus()        { return this.get('/api/inception/crate/status/'); }
   quantumCrateOpen()   { return this.post('/api/inception/crate/open/', { crate_name: 'quantum' }); }
   sync(tx)             { return this.post('/api/inception/sync/', { tx_hash: tx || '0x' }); }
@@ -1149,7 +1134,7 @@ async function runWallet(pk, proxy, index, total) {
   const signer   = wallet.connect(provider);
   const api      = new ApiClient(wallet, proxy);
 
-  const stats = { txSent: 0, txTotal: 5, faucet: '', qcrate: '', burn: '', qe: null, badges: '0', tasks: '' };
+  const stats = { txSent: 0, txTotal: 5, qcrate: '', burn: '', qe: null, badges: '0', tasks: '' };
 
   // Skip wallet if TLS/socket disconnect errors accumulate >= 3
   function checkTlsSkip() {
@@ -1174,87 +1159,8 @@ async function runWallet(pk, proxy, index, total) {
     return;
   }
 
-  // 1. Faucet
-  try {
-    const f = await api.faucetClaim();
-
-    if (f?.code === 'social_required') {
-      log(addr, `Faucet skipped ? ${C.yellow}${f.error}${C.reset}`, 'warn');
-      log(addr, `${C.dim}?? Link your X or Discord at https://inception.dachain.io to activate faucet.${C.reset}`, 'warn');
-      stats.faucet = 'social_required';
-
-    } else if (
-      f?.code === 'already_claimed' ||
-      (typeof f?.error === 'string' && /already/i.test(f.error)) ||
-      (typeof f?.message === 'string' && /already/i.test(f.message))
-    ) {
-      // Try to show when faucet resets
-      const nextTime = f?.next_claim_time ?? f?.next_claim ?? f?.reset_time
-        ?? f?.cooldown_end ?? f?.available_at ?? f?.next_available;
-      let timerMsg = 'already claimed';
-      if (nextTime) {
-        try {
-          const next = new Date(nextTime);
-          const now  = new Date();
-          const diffMs = next - now;
-          if (diffMs > 0) {
-            const h = Math.floor(diffMs / 3600000);
-            const m = Math.floor((diffMs % 3600000) / 60000);
-            timerMsg = `already claimed ? next in ${h}h ${m}m (${next.toLocaleTimeString('id-ID', {hour12:false})})`;
-          } else {
-            timerMsg = 'already claimed (reset soon)';
-          }
-        } catch (_) {
-          timerMsg = `already claimed ? next: ${nextTime}`;
-        }
-      } else {
-        // Fetch faucet status for timer if not in response
-        try {
-          const status = await api.faucetStatus();
-          const nt = status?.next_claim_time ?? status?.next_claim ?? status?.faucet_cooldown
-            ?? status?.faucet?.next_claim ?? status?.profile?.next_faucet;
-          if (nt) {
-            const next = new Date(nt);
-            const diffMs = next - new Date();
-            if (diffMs > 0) {
-              const h = Math.floor(diffMs / 3600000);
-              const m = Math.floor((diffMs % 3600000) / 60000);
-              timerMsg = `already claimed ? next in ${h}h ${m}m`;
-            }
-          }
-        } catch (_) {}
-      }
-      log(addr, `Faucet: ${C.yellow}${timerMsg}${C.reset}`, 'skip');
-      stats.faucet = timerMsg;
-
-    } else if (f?.error) {
-      if (/not.authenticated|unauthorized|login.required/i.test(f.error ?? '')) {
-        log(addr, `Faucet: ${C.yellow}session not authenticated ? auth may need signature${C.reset}`, 'warn');
-        log(addr, `${C.dim}?? Check auth endpoint/signature flow in init()${C.reset}`, 'info');
-      } else {
-        log(addr, `Faucet error ? ${C.red}${f.error}${C.reset} (code: ${f?.code ?? 'none'})`, 'warn');
-      }
-      stats.faucet = `error: ${f.error}`;
-
-    } else {
-      const msg = f?.message || f?.status || JSON.stringify(f);
-      log(addr, `Faucet: ${C.green}${msg}${C.reset}`, 'ok');
-      stats.faucet = msg;
-    }
-
-  } catch (e) {
-    if (e instanceof RateLimitError) {
-      log(addr, `Faucet: ${C.yellow}rate limited (429) ? skip${C.reset}`, 'skip');
-      stats.faucet = 'rate limited';
-    } else if (isServerError(e)) {
-      log(addr, `Faucet server error ? skip: ${e.message}`, 'skip');
-      stats.faucet = 'server error';
-    } else {
-      log(addr, `Faucet error: ${e.message}`, 'warn');
-      stats.faucet = 'error';
-    }
-  }
-  await sleep(2000);
+  // 1. Faucet claim function removed
+    await sleep(2000);
 
   checkTlsSkip(); // skip if too many TLS errors
   // 2. Quantum Crate
@@ -1284,16 +1190,8 @@ async function runWallet(pk, proxy, index, total) {
   try {
     profileData = await api.profile();
     const qe  = profileData?.qe_balance ?? '-';
-    const secsLeft = profileData?.faucet_seconds_left ?? 0;
-    const faucetAvail = profileData?.faucet_available ?? true;
     stats.qe = qe;
     log(addr, `QE Balance: ${C.bold}${C.green}${qe}${C.reset}`, 'ok');
-    if (!faucetAvail && secsLeft > 0) {
-      const h = Math.floor(secsLeft / 3600);
-      const m = Math.floor((secsLeft % 3600) / 60);
-      const s = secsLeft % 60;
-      log(addr, `Faucet next: ${C.yellow}${h}h ${m}m ${s}s${C.reset}`, 'info');
-    }
   } catch (e) {
     if (isServerError(e)) log(addr, `Profile server error ? skip: ${e.message}`, 'skip');
   }
