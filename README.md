@@ -9,7 +9,6 @@ An automated bot to perform daily on-chain activities on the **DAC Inception Tes
 | Feature | Description |
 |---------|-------------|
 | 💸 **Send TX** | Custom transaction count — amount auto-scales to balance |
-| 🚰 **Faucet** | Auto-claim daily faucet — shows cooldown timer if already claimed |
 | 📦 **Quantum Crate** | Open up to 5 Quantum Crates per day (150 QE each) — shows reset timer |
 | 🔥 **Burn DACC** | Burn DACC to earn QE (configurable, max 0.1 DAC/cycle) |
 | 🏅 **Badge Mint** | Auto-mint rank badges on-chain — **auto-skipped if all already minted** |
@@ -126,7 +125,6 @@ nohup node auto.js &
 | 429 rate-limit (2nd hit) | Skip immediately |
 | 500/502/503/504 retry | **2 s × attempt** (up to 5 retries) |
 | Between TXs | Random **1–2 seconds** *(reduced from 2–5 s)* |
-| After Faucet | **2 seconds** |
 | Between Quantum Crate opens | Random **1.5–3 seconds** |
 | Between badge mints | **1.5 seconds** |
 | Between wallets | **3–6 seconds** |
@@ -142,22 +140,21 @@ Timeout Skip Check  →  skip immediately if wallet reached 5x consecutive timeo
     │
 Auth (SIWE nonce+sign → fallback address-only)
     │
-    ├─ 1. Faucet Claim          → shows "next in Xh Ym" if already claimed
-    ├─ 2. Quantum Crate (≤5x)   → shows reset timer when limit reached
-    ├─ 3. Send TX × 3           → amount auto-scaled to balance
-    ├─ 4. Burn DACC → QE
-    ├─ 5. Fetch Profile         → QE balance + faucet timer + badges[]
+    ├─ 1. Quantum Crate (≤5x)   → shows reset timer when limit reached
+    ├─ 2. Send TX × 3           → amount auto-scaled to balance
+    ├─ 3. Burn DACC → QE
+    ├─ 4. Fetch Profile         → QE balance + badges[]
     │      │
-    │      └─ 6. Mint Rank Badges
+    │      └─ 5. Mint Rank Badges
     │              ├─ AUTO-SKIP if all rank badges already minted on-chain
     │              ├─ POST /nft/claim-signature/  {rank_key}
     │              ├─ contract.claimRank(uint8, bytes)
     │              │       └─ on error: hasMinted() check
     │              └─ POST /nft/confirm-mint/     {rank_key, tx_hash}
     │
-    ├─ 7. Activity Tasks        → DISABLED
+    ├─ 6. Activity Tasks        → DISABLED
     │
-    └─ 8. Print Summary
+    └─ 7. Print Summary
          └─ On success: reset timeout counter for this wallet
 ```
 
@@ -261,7 +258,6 @@ const MAX_TIMEOUT_ERRORS = 5; // increase to be more lenient, decrease to skip f
 -------------------------------------------------------
 [10:30:01] ▶ [0x000..eF39] Wallet 1/50 | direct
 [10:30:02] ✓ [0x000..eF39] Auth OK
-[10:30:02] ⏭ [0x000..eF39] Faucet: already claimed — next in 18h 32m
 [10:30:04] ℹ [0x000..eF39] Opening up to 5 Quantum Crate(s)...
 [10:30:05] ✓ [0x000..eF39] Quantum Crate 4/5 ✓ — reward: 500 QE | QE total: 12662
 [10:30:06] ⏭ [0x000..eF39] Quantum Crate: daily limit reached — resets in 20h 14m
@@ -275,7 +271,6 @@ const MAX_TIMEOUT_ERRORS = 5; // increase to be more lenient, decrease to skip f
 -------------------------------------------------------
 [10:30:19] 📊 SUMMARY [0xD767..eF38]
    ✓ TX Sent       : 3/3
-   ⏭ Faucet        : already claimed — next in 18h 32m
    ✓ Quantum Crate : 5/5 opened (+750 QE)
    ✓ Burn          : success
    🏅 Badges        : 9 already minted (auto-skipped)
