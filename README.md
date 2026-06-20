@@ -89,14 +89,14 @@ The bot starts immediately, prints a config summary, and loops every **11–12 h
 
 ```bash
 # PM2 (recommended)
-pm2 start bot.js --name dachain-bot
+pm2 start auto.js --name dachain-bot
 pm2 save && pm2 logs dachain-bot
 
 # nohup
 nohup node auto.js &
 
 # Cron (runs at 00:00 and 12:00 UTC)
-0 0,12 * * * cd /root/dachain-bot && node bot.js >> bot.log 2>&1
+0 0,12 * * * cd /root/dachain-bot && node auto.js >> bot.log 2>&1
 ```
 
 ---
@@ -114,7 +114,7 @@ nohup node auto.js &
 | `mintBadge` | `true` | Enable rank badge minting (auto-skipped if all minted) |
 | `MAX_TIMEOUT_ERRORS` | `5` | Max consecutive RPC timeout errors before wallet is skipped |
 
-> To change defaults, edit the `CFG` object (and `MAX_TIMEOUT_ERRORS` constant) at the top of `bot.js`.
+> To change defaults, edit the `CFG` object (and `MAX_TIMEOUT_ERRORS` constant) at the top of `auto.js`.
 
 ---
 
@@ -241,7 +241,7 @@ During wallet execution:
 
 ### Configuration
 
-To change the threshold, edit `MAX_TIMEOUT_ERRORS` near the top of `bot.js`:
+To change the threshold, edit `MAX_TIMEOUT_ERRORS` near the top of `auto.js`:
 
 ```js
 const MAX_TIMEOUT_ERRORS = 5; // increase to be more lenient, decrease to skip faster
@@ -308,7 +308,7 @@ The following changes have been applied to reduce per-wallet execution time and 
 
 ```
 dachain-bot/
-├── bot.js           ← main script (non-interactive, v2.4 optimized)
+├── auto.js           ← main script (non-interactive, v2.4 optimized)
 ├── pk.txt           ← wallet private keys (required)
 ├── address.txt      ← TX target addresses (optional)
 ├── proxy.txt        ← proxy list (optional)
