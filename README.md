@@ -5,7 +5,7 @@ An automated bot to perform daily on-chain activities on the **DAC Inception Tes
 ---
 
 ## ✨ Features
-faucet skiped (off)
+faucet skiped 
 | Feature | Description |
 |---------|-------------|
 | 💸 **Send TX** | Custom transaction count — amount auto-scales to balance |
